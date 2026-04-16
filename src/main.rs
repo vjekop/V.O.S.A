@@ -29,6 +29,9 @@ enum Command {
         /// MAVLink connection string (e.g. tcp:127.0.0.1:5760). If provided, runs against hardware instead of simulator.
         #[arg(long, value_name = "CONN_STR")]
         mavlink: Option<String>,
+        /// ROS 2 Domain ID. If provided, connects natively to the ROS 2 DDS network instead of simulating.
+        #[arg(long, value_name = "DOMAIN_ID")]
+        ros2: Option<u32>,
     },
     /// Validate a .vosa file without executing
     Check {
@@ -43,7 +46,7 @@ fn main() {
     let cli = Cli::parse();
 
     match cli.command {
-        Command::Run { file, ast, mavlink } => cmd_run(file, ast, mavlink),
+        Command::Run { file, ast, mavlink, ros2 } => cmd_run(file, ast, mavlink, ros2),
         Command::Check { file }   => cmd_check(file),
         Command::Docs             => cmd_docs(),
     }
@@ -59,7 +62,7 @@ fn read_file(path: &PathBuf) -> String {
     }
 }
 
-fn cmd_run(file: PathBuf, print_ast: bool, mavlink: Option<String>) {
+fn cmd_run(file: PathBuf, print_ast: bool, mavlink: Option<String>, ros2: Option<u32>) {
     println!("{}", banner());
     let src = read_file(&file);
 
@@ -85,7 +88,13 @@ fn cmd_run(file: PathBuf, print_ast: bool, mavlink: Option<String>) {
     println!("{} All safety constraints passed.", "✔".green().bold());
 
     // Execute
-    let result = if let Some(conn) = mavlink {
+    let result = if let Some(domain_id) = ros2 {
+        println!("{}", "── ROS 2 DOMAIN EXECUTION ──".magenta().bold());
+        match vosa::hw_bridge::Ros2Bridge::new(domain_id) {
+            Ok(mut bridge) => bridge.execute(&mission),
+            Err(e) => Err(e),
+        }
+    } else if let Some(conn) = mavlink {
         println!("{}", "── MAVLink Execution ──".magenta().bold());
         let mut bridge = vosa::hw_bridge::MavlinkBridge::new(&conn);
         bridge.execute(&mission)

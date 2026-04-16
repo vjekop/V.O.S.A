@@ -9,9 +9,10 @@ Versions follow [Semantic Versioning](https://semver.org/).
 ## [Unreleased]
 
 ### Added
+- **ROS 2 Network Integration**: Added native ROS 2 publisher support using pure-Rust DDS (`ros2-client`). The compiler maps standard actions natively to `/vosa/waypoint` (`PoseStamped`) and `/vosa/command` (`String`).
 - **Parallel Control Flow**: Added `parallel { ... }` structural block parsing and execution logic, enabling commands like camera recording to run simultaneously alongside positional waypoints.
 - **MAVLink Hardware Bridge**: Created a MVP `MavlinkBridge` allowing AST translation directly into MAV_CMD packets rather than simulations.
-- **Hardware CLI Integration**: Added a `--mavlink <CONN_STR>` flag so developers can connect missions over TCP/UDP.
+- **Hardware CLI Integration**: Added a `--mavlink <CONN_STR>` flag so developers can connect missions over TCP/UDP, and `--ros2 <DOMAIN_ID>` for DDS domains.
 - **Control Flow**: Added support for `if` statements and `repeat` loops (`TokenKind::If`, `TokenKind::Repeat`). 
 - **Simulated State Variables**: Introduced `battery` and relative operators (`<`, `>`), allowing logic branches (`if battery < 30% { return_home() }`).
 - **AST Restructuring**: Refactored `Sequence` to contain nested `Statement` elements to support deeper block depths instead of un-nested flattened `Command` trees. 

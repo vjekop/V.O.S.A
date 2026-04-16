@@ -3,6 +3,9 @@ use crate::parser::ast::*;
 use crate::runtime::ExecutionReport;
 
 /// A hardware bridge that translates VOSA semantics to MAVLink packets.
+pub mod ros2;
+
+pub use ros2::Ros2Bridge;
 pub struct MavlinkBridge {
     connection_string: String,
     // Provide a mocked ExecutionReport generator for now
