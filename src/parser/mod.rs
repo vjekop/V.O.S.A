@@ -60,15 +60,6 @@ impl Parser {
 
     // ── Quantity helpers ──────────────────────────────────────────────────────
 
-    /// Expect a Quantity with the given unit.
-    fn expect_quantity(&mut self, unit: Unit) -> Result<f64, VosaError> {
-        match self.consume() {
-            TokenKind::Quantity(v, u) if u == unit => Ok(v),
-            TokenKind::Number(v) => Ok(v), // bare numbers are accepted (unit inferred)
-            other => Err(self.parse_err(format!("expected a quantity with unit {:?}, got {:?}", unit, other))),
-        }
-    }
-
     /// Accept a bare Number or a Quantity (any unit), returning the value.
     fn expect_number(&mut self) -> Result<f64, VosaError> {
         match self.consume() {
@@ -186,13 +177,22 @@ impl Parser {
         }
     }
 
-    /// Parse `circle(center: home, radius: 500m)`
+    /// Parse a geofence shape.
+    ///
+    /// Supported forms:
+    /// - `circle(center: home, radius: 500m)` — geofence centered on launch point
+    /// - `circle(lat: 38.897, lon: -77.036, radius: 500m)` — geofence centered on a GPS coordinate
+    ///
+    /// The coordinate form is required for geofence enforcement in the simulator,
+    /// since "home" is only known at runtime on real hardware.
     fn parse_geofence(&mut self) -> Result<Geofence, VosaError> {
         self.expect(&TokenKind::Circle)?;
         self.expect(&TokenKind::LParen)?;
 
         let mut center: Option<GeoCenter> = None;
         let mut radius: Option<f64> = None;
+        let mut lat: Option<f64> = None;
+        let mut lon: Option<f64> = None;
 
         loop {
             match self.peek().clone() {
@@ -205,7 +205,18 @@ impl Parser {
                         TokenKind::Home => GeoCenter::Home,
                         other => return Err(self.parse_err(format!("expected geofence center, got {:?}", other))),
                     });
-                    // optional comma
+                    if self.peek() == &TokenKind::Comma { self.advance(); }
+                }
+                TokenKind::Lat => {
+                    self.advance();
+                    self.expect(&TokenKind::Colon)?;
+                    lat = Some(self.expect_number()?);
+                    if self.peek() == &TokenKind::Comma { self.advance(); }
+                }
+                TokenKind::Lon => {
+                    self.advance();
+                    self.expect(&TokenKind::Colon)?;
+                    lon = Some(self.expect_number()?);
                     if self.peek() == &TokenKind::Comma { self.advance(); }
                 }
                 TokenKind::Radius => {
@@ -218,8 +229,20 @@ impl Parser {
             }
         }
 
+        // Resolve the center: explicit `center: home` wins; otherwise use lat/lon coords.
+        let resolved_center = center
+            .or_else(|| match (lat, lon) {
+                (Some(la), Some(lo)) => Some(GeoCenter::Coord { lat: la, lon: lo }),
+                _ => None,
+            })
+            .ok_or_else(|| {
+                self.parse_err(
+                    "geofence circle requires either 'center: home' or 'lat:' and 'lon:' params",
+                )
+            })?;
+
         Ok(Geofence::Circle {
-            center: center.ok_or_else(|| self.parse_err("geofence circle requires 'center'"))?,
+            center: resolved_center,
             radius: radius.ok_or_else(|| self.parse_err("geofence circle requires 'radius'"))?,
         })
     }

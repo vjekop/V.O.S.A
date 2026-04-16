@@ -8,7 +8,14 @@ Versions follow [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
-Changes staged but not yet versioned will appear here before each release.
+### Added
+- **Speed Enforcement**: The `SafetySandbox` now statically verifies that `flight.cruise_speed` does not exceed `safety.max_speed`.
+- **Geofence Enforcement**: The `Runtime` loop now validates every waypoint dynamically. If a waypoint exceeds the geofence radius from the center, the mission aborts via a `SafetyViolation`.
+- **Coordinate-based Geofence**: The parser now supports `circle(lat: X, lon: Y, radius: Z)` in addition to `center: home`. This is required so the simulator can run geofences without "home" being dynamically locked in by hardware.
+- **Unit & Integration Tests**: Added test suites for the `SafetySandbox`, `haversine` distance math, and `Runtime` geofence module.
+
+### Fixed
+- Fixed an unmatched `expect_quantity` warning in the parser component.
 
 ---
 
