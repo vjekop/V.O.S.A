@@ -1,0 +1,44 @@
+// V.O.S.A. Example — Aerial photo survey with camera control
+
+mission "photo_survey" {
+
+    vehicle: Hexacopter
+
+    safety {
+        max_altitude:    100m
+        min_altitude:    10m
+        max_speed:       12m/s
+        battery_reserve: 30%
+        geofence:        circle(center: home, radius: 800m)
+        failsafe:        return_home
+    }
+
+    flight {
+        cruise_altitude: 60m
+        cruise_speed:    6m/s
+    }
+
+    sequence {
+        takeoff(15m)
+
+        // First transect
+        waypoint(lat: 39.100, lon: -76.500, alt: 60m)
+        camera(action: record, resolution: "4K")
+
+        waypoint(lat: 39.105, lon: -76.500, alt: 60m)
+        hover(2s)
+        camera(action: photo)
+
+        waypoint(lat: 39.105, lon: -76.505, alt: 60m)
+        hover(2s)
+        camera(action: photo)
+
+        waypoint(lat: 39.100, lon: -76.505, alt: 60m)
+        hover(2s)
+        camera(action: photo)
+
+        camera(action: stop)
+        return_home()
+        land()
+    }
+}

@@ -1,0 +1,16 @@
+// V.O.S.A. Example — Minimal hello-world mission
+// The simplest valid VOSA program: just take off and land.
+
+mission "hello_world" {
+
+    safety {
+        max_altitude: 30m
+        failsafe:     land
+    }
+
+    sequence {
+        takeoff(10m)
+        hover(3s)
+        land()
+    }
+}

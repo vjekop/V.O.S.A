@@ -269,12 +269,23 @@ impl Parser {
     fn parse_command(&mut self) -> Result<Command, VosaError> {
         match self.consume() {
             TokenKind::Takeoff    => self.parse_takeoff(),
-            TokenKind::Land       => Ok(Command::Land),
+            TokenKind::Land       => { self.consume_empty_parens(); Ok(Command::Land) }
             TokenKind::Hover      => self.parse_hover(),
             TokenKind::Waypoint   => self.parse_waypoint(),
-            TokenKind::ReturnHome => Ok(Command::ReturnHome),
+            TokenKind::ReturnHome => { self.consume_empty_parens(); Ok(Command::ReturnHome) }
             TokenKind::Camera     => self.parse_camera(),
             other => Err(self.parse_err(format!("unknown command: {:?}", other))),
+        }
+    }
+
+    /// Consume `()` if the next two tokens are `(` then `)` — for no-arg commands.
+    fn consume_empty_parens(&mut self) {
+        if self.peek() == &TokenKind::LParen {
+            self.advance(); // (
+            // allow optional RParen
+            if self.peek() == &TokenKind::RParen {
+                self.advance(); // )
+            }
         }
     }
 
