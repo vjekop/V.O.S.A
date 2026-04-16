@@ -1,0 +1,40 @@
+// V.O.S.A. Example — Basic perimeter survey mission
+// Demonstrates: vehicle, safety, flight config, and a full sequence
+
+mission "perimeter_scan" {
+
+    vehicle: Quadcopter
+
+    safety {
+        max_altitude:    120m
+        min_altitude:    5m
+        max_speed:       15m/s
+        battery_reserve: 25%
+        geofence:        circle(center: home, radius: 500m)
+        failsafe:        return_home
+    }
+
+    flight {
+        cruise_altitude: 50m
+        cruise_speed:    8m/s
+    }
+
+    sequence {
+        takeoff(10m)
+
+        // Fly to the first corner of the perimeter
+        waypoint(lat: 38.897, lon: -77.036, alt: 50m)
+        camera(action: record, resolution: "4K")
+
+        waypoint(lat: 38.900, lon: -77.036, alt: 50m)
+        waypoint(lat: 38.900, lon: -77.040, alt: 50m)
+        waypoint(lat: 38.897, lon: -77.040, alt: 50m)
+
+        // Pause for inspection
+        hover(5s)
+
+        camera(action: stop)
+        return_home()
+        land()
+    }
+}

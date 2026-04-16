@@ -1,0 +1,24 @@
+[package]
+name = "vosa"
+version = "0.1.0"
+edition = "2021"
+description = "V.O.S.A. — Vectorized Operational Safety Autonomy DSL for autonomous drones"
+license = "Apache-2.0"
+repository = "https://github.com/YOUR_USERNAME/vosa"
+keywords = ["drone", "dsl", "autonomy", "safety", "robotics"]
+categories = ["command-line-utilities", "parser-implementations"]
+
+[[bin]]
+name = "vosa"
+path = "src/main.rs"
+
+[lib]
+name = "vosa"
+path = "src/lib.rs"
+
+[dependencies]
+thiserror = "1.0"
+clap = { version = "4.5", features = ["derive"] }
+colored = "2.1"
+
+[dev-dependencies]
