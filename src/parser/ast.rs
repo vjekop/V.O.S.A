@@ -79,11 +79,31 @@ pub struct FlightConfig {
     pub cruise_speed: Option<f64>,
 }
 
-// ── Sequence & commands ───────────────────────────────────────────────────────
+// ── Sequence & statements ───────────────────────────────────────────────────────
 
 #[derive(Debug, Clone)]
 pub struct Sequence {
-    pub commands: Vec<Command>,
+    pub statements: Vec<Statement>,
+}
+
+#[derive(Debug, Clone)]
+pub enum Statement {
+    /// A regular flight command
+    Command(Command),
+    /// Loop the inner sequence `count` times
+    Repeat { count: usize, body: Sequence },
+    /// Execute inner sequence if battery constraint falls true
+    IfBattery {
+        operator: Operator,
+        threshold_percent: f64,
+        body: Sequence,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum Operator {
+    LessThan,
+    GreaterThan,
 }
 
 #[derive(Debug, Clone)]

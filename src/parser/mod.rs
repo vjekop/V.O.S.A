@@ -277,16 +277,65 @@ impl Parser {
 
     fn parse_sequence(&mut self) -> Result<Sequence, VosaError> {
         self.expect(&TokenKind::LBrace)?;
-        let mut commands = Vec::new();
+        let mut statements = Vec::new();
 
         loop {
             match self.peek().clone() {
                 TokenKind::RBrace => { self.advance(); break; }
                 TokenKind::Eof    => return Err(self.parse_err("unexpected EOF in sequence block")),
-                _ => commands.push(self.parse_command()?),
+                _ => statements.push(self.parse_statement()?),
             }
         }
-        Ok(Sequence { commands })
+        Ok(Sequence { statements })
+    }
+
+    fn parse_statement(&mut self) -> Result<Statement, VosaError> {
+        match self.peek().clone() {
+            TokenKind::Repeat => self.parse_repeat(),
+            TokenKind::If => self.parse_if(),
+            _ => Ok(Statement::Command(self.parse_command()?)),
+        }
+    }
+
+    fn parse_repeat(&mut self) -> Result<Statement, VosaError> {
+        self.expect(&TokenKind::Repeat)?;
+        
+        let count = match self.consume() {
+            TokenKind::Number(n) => n as usize,
+            other => return Err(self.parse_err(format!("expected repeat count number, got {:?}", other))),
+        };
+        
+        let body = self.parse_sequence()?;
+        Ok(Statement::Repeat { count, body })
+    }
+
+    fn parse_if(&mut self) -> Result<Statement, VosaError> {
+        self.expect(&TokenKind::If)?;
+        
+        let target = self.consume();
+        if target != TokenKind::Battery {
+            return Err(self.parse_err(format!("'if' currently only supports 'battery', got {:?}", target)));
+        }
+        
+        let operator = match self.consume() {
+            TokenKind::LessThan => Operator::LessThan,
+            TokenKind::GreaterThan => Operator::GreaterThan,
+            other => return Err(self.parse_err(format!("expected '<' or '>', got {:?}", other))),
+        };
+        
+        let threshold_percent = match self.consume() {
+            TokenKind::Quantity(v, Unit::Percent) => v,
+            TokenKind::Number(v) => v,
+            other => return Err(self.parse_err(format!("expected battery threshold, got {:?}", other))),
+        };
+        
+        let body = self.parse_sequence()?;
+        
+        Ok(Statement::IfBattery {
+            operator,
+            threshold_percent,
+            body
+        })
     }
 
     fn parse_command(&mut self) -> Result<Command, VosaError> {

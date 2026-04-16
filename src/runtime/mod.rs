@@ -39,6 +39,8 @@ pub struct Runtime {
     total_distance: f64,
     /// Highest altitude reached (metres)
     max_alt: f64,
+    /// Simulated battery
+    battery_percent: f64,
 }
 
 impl Runtime {
@@ -50,6 +52,7 @@ impl Runtime {
             current_alt: 0.0,
             total_distance: 0.0,
             max_alt: 0.0,
+            battery_percent: 100.0,
         }
     }
 
@@ -86,8 +89,8 @@ impl Runtime {
             }
         }
 
-        for cmd in &mission.sequence.commands {
-            self.execute_command(cmd, mission.safety.as_ref())?;
+        for stmt in &mission.sequence.statements {
+            self.execute_statement(stmt, mission.safety.as_ref())?;
         }
 
         self.log("[MISSION] Complete.");
@@ -98,6 +101,42 @@ impl Runtime {
             total_distance_m: self.total_distance,
             max_altitude_m: self.max_alt,
         })
+    }
+
+    /// Execute statements handling repeats and battery thresholds natively.
+    fn execute_statement(
+        &mut self,
+        stmt: &Statement,
+        safety: Option<&SafetyBlock>,
+    ) -> Result<(), VosaError> {
+        match stmt {
+            Statement::Command(cmd) => self.execute_command(cmd, safety)?,
+            Statement::Repeat { count, body } => {
+                for i in 0..*count {
+                    self.log(format!("[REPEAT] Iteration {}/{}", i + 1, count));
+                    for inner_stmt in &body.statements {
+                        self.execute_statement(inner_stmt, safety)?;
+                    }
+                }
+            }
+            Statement::IfBattery { operator, threshold_percent, body } => {
+                let current_battery = self.battery_percent;
+                let condition_met = match operator {
+                    Operator::LessThan => current_battery < *threshold_percent,
+                    Operator::GreaterThan => current_battery > *threshold_percent,
+                };
+                
+                let op_str = if *operator == Operator::LessThan { "<" } else { ">" };
+                self.log(format!("[IF BATTERY] {} {}% — condition is {}", current_battery, op_str, condition_met));
+                
+                if condition_met {
+                    for inner_stmt in &body.statements {
+                        self.execute_statement(inner_stmt, safety)?;
+                    }
+                }
+            }
+        }
+        Ok(())
     }
 
     /// Execute a single command, checking dynamic safety constraints as needed.
@@ -146,6 +185,7 @@ impl Runtime {
 
                 // ── Move to waypoint ──────────────────────────────────────────
                 let dist = haversine(self.current_lat, self.current_lon, *lat, *lon);
+                self.drain_battery(dist);
                 self.total_distance += dist;
                 self.current_lat = *lat;
                 self.current_lon = *lon;
@@ -158,6 +198,7 @@ impl Runtime {
 
             Command::ReturnHome => {
                 let dist = haversine(self.current_lat, self.current_lon, 0.0, 0.0);
+                self.drain_battery(dist);
                 self.total_distance += dist;
                 self.log(format!("[RTH] Returning to home  [{dist:.0}m]"));
                 self.current_lat = 0.0;
@@ -170,6 +211,13 @@ impl Runtime {
             }
         }
         Ok(())
+    }
+    fn drain_battery(&mut self, distance_m: f64) {
+        // Simple simulator heuristic: 1% drain per 500m
+        self.battery_percent -= distance_m / 500.0;
+        if self.battery_percent < 0.0 {
+            self.battery_percent = 0.0;
+        }
     }
 }
 
@@ -198,13 +246,13 @@ mod tests {
     use super::*;
     use crate::parser::ast::*;
 
-    fn simple_mission(safety: Option<SafetyBlock>, commands: Vec<Command>) -> Mission {
+    fn simple_mission(safety: Option<SafetyBlock>, statements: Vec<Statement>) -> Mission {
         Mission {
             name: "rt_test".into(),
             vehicle: None,
             safety,
             flight: None,
-            sequence: Sequence { commands },
+            sequence: Sequence { statements },
         }
     }
 
@@ -213,8 +261,8 @@ mod tests {
         let m = simple_mission(
             None,
             vec![
-                Command::Takeoff { altitude: 25.0 },
-                Command::Land,
+                Statement::Command(Command::Takeoff { altitude: 25.0 }),
+                Statement::Command(Command::Land),
             ],
         );
         let report = Runtime::new().execute(&m).unwrap();
@@ -235,9 +283,9 @@ mod tests {
                 ..Default::default()
             }),
             vec![
-                Command::Takeoff { altitude: 10.0 },
-                Command::Waypoint { lat: 0.001, lon: 0.0, alt: 10.0 },
-                Command::Land,
+                Statement::Command(Command::Takeoff { altitude: 10.0 }),
+                Statement::Command(Command::Waypoint { lat: 0.001, lon: 0.0, alt: 10.0 }),
+                Statement::Command(Command::Land),
             ],
         );
         assert!(Runtime::new().execute(&m).is_ok());
@@ -256,8 +304,8 @@ mod tests {
                 ..Default::default()
             }),
             vec![
-                Command::Takeoff { altitude: 10.0 },
-                Command::Waypoint { lat: 0.001, lon: 0.0, alt: 10.0 },
+                Statement::Command(Command::Takeoff { altitude: 10.0 }),
+                Statement::Command(Command::Waypoint { lat: 0.001, lon: 0.0, alt: 10.0 }),
             ],
         );
         let err = Runtime::new().execute(&m).unwrap_err();

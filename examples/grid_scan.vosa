@@ -1,0 +1,50 @@
+// V.O.S.A. Example — Grid pattern scanning mission using repeat loop and if conditions
+
+mission "grid_scan" {
+
+    vehicle: Quadcopter
+
+    safety {
+        max_altitude:    80m
+        min_altitude:    10m
+        max_speed:       10m/s
+        battery_reserve: 20%
+        failsafe:        return_home
+    }
+
+    flight {
+        cruise_altitude: 40m
+        cruise_speed:    5m/s
+    }
+
+    sequence {
+        takeoff(15m)
+
+        waypoint(lat: 38.000, lon: -77.000, alt: 40m)
+        camera(action: record, resolution: "4K")
+
+        repeat 3 {
+            // Fly North
+            waypoint(lat: 38.010, lon: -77.000, alt: 40m)
+            // Shift East
+            waypoint(lat: 38.010, lon: -76.990, alt: 40m)
+            // Fly South
+            waypoint(lat: 38.000, lon: -76.990, alt: 40m)
+            // Shift East again for the next pass
+            waypoint(lat: 38.000, lon: -76.980, alt: 40m)
+        }
+
+        camera(action: stop)
+
+        if battery < 30% {
+            return_home()
+            land()
+        }
+        
+        if battery > 30% {
+            hover(10s)
+            return_home()
+            land()
+        }
+    }
+}

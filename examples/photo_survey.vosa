@@ -9,7 +9,7 @@ mission "photo_survey" {
         min_altitude:    10m
         max_speed:       12m/s
         battery_reserve: 30%
-        geofence:        circle(center: home, radius: 800m)
+        geofence:        circle(lat: 39.100, lon: -76.500, radius: 800m)
         failsafe:        return_home
     }
 

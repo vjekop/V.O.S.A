@@ -101,6 +101,8 @@ impl Lexer {
             ')' => { self.advance(); TokenKind::RParen }
             ':' => { self.advance(); TokenKind::Colon }
             ',' => { self.advance(); TokenKind::Comma }
+            '<' => { self.advance(); TokenKind::LessThan }
+            '>' => { self.advance(); TokenKind::GreaterThan }
             '"' => self.lex_string()?,
             c if c.is_ascii_digit() || (c == '-' && self.peek2().map_or(false, |d| d.is_ascii_digit())) => {
                 self.lex_number()?
@@ -197,6 +199,8 @@ impl Lexer {
             "flight"        => TokenKind::Flight,
             "sequence"      => TokenKind::Sequence,
             "vehicle"       => TokenKind::Vehicle,
+            "repeat"        => TokenKind::Repeat,
+            "if"            => TokenKind::If,
             // Named values
             "home"          => TokenKind::Home,
             "circle"        => TokenKind::Circle,
@@ -235,6 +239,8 @@ impl Lexer {
             "duration"      => TokenKind::Duration,
             "action"        => TokenKind::Action,
             "resolution"    => TokenKind::Resolution,
+            // State
+            "battery"       => TokenKind::Battery,
             // Booleans
             "true"          => TokenKind::Bool(true),
             "false"         => TokenKind::Bool(false),

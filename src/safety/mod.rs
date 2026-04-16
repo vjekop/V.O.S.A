@@ -43,10 +43,28 @@ impl SafetySandbox {
         }
 
         // ── Per-command checks ────────────────────────────────────────────────
-        for cmd in &mission.sequence.commands {
-            self.check_command(cmd, safety)?;
+        for stmt in &mission.sequence.statements {
+            self.check_statement(stmt, safety)?;
         }
 
+        Ok(())
+    }
+
+    /// Recursively validate statements against the safety block.
+    fn check_statement(&self, stmt: &Statement, safety: &SafetyBlock) -> Result<(), VosaError> {
+        match stmt {
+            Statement::Command(cmd) => self.check_command(cmd, safety)?,
+            Statement::Repeat { body, .. } => {
+                for inner_stmt in &body.statements {
+                    self.check_statement(inner_stmt, safety)?;
+                }
+            }
+            Statement::IfBattery { body, .. } => {
+                for inner_stmt in &body.statements {
+                    self.check_statement(inner_stmt, safety)?;
+                }
+            }
+        }
         Ok(())
     }
 
@@ -115,21 +133,21 @@ mod tests {
             vehicle: None,
             safety: Some(safety),
             flight: None,
-            sequence: Sequence { commands },
+            sequence: Sequence { statements },
         }
     }
 
     fn mission_with_flight_and_safety(
         safety: SafetyBlock,
         flight: FlightConfig,
-        commands: Vec<Command>,
+        statements: Vec<Statement>,
     ) -> Mission {
         Mission {
             name: "test".into(),
             vehicle: None,
             safety: Some(safety),
             flight: Some(flight),
-            sequence: Sequence { commands },
+            sequence: Sequence { statements },
         }
     }
 
@@ -137,7 +155,7 @@ mod tests {
     fn takeoff_within_max_altitude_passes() {
         let mission = mission_with_safety(
             SafetyBlock { max_altitude: Some(100.0), ..Default::default() },
-            vec![Command::Takeoff { altitude: 50.0 }],
+            vec![Statement::Command(Command::Takeoff { altitude: 50.0 })],
         );
         assert!(SafetySandbox::new().validate(&mission).is_ok());
     }
@@ -146,7 +164,7 @@ mod tests {
     fn takeoff_exceeds_max_altitude_is_violation() {
         let mission = mission_with_safety(
             SafetyBlock { max_altitude: Some(30.0), ..Default::default() },
-            vec![Command::Takeoff { altitude: 50.0 }],
+            vec![Statement::Command(Command::Takeoff { altitude: 50.0 })],
         );
         let err = SafetySandbox::new().validate(&mission).unwrap_err();
         assert!(matches!(err, VosaError::SafetyViolation(_)));
@@ -157,7 +175,7 @@ mod tests {
     fn waypoint_below_min_altitude_is_violation() {
         let mission = mission_with_safety(
             SafetyBlock { min_altitude: Some(10.0), ..Default::default() },
-            vec![Command::Waypoint { lat: 0.0, lon: 0.0, alt: 5.0 }],
+            vec![Statement::Command(Command::Waypoint { lat: 0.0, lon: 0.0, alt: 5.0 })],
         );
         let err = SafetySandbox::new().validate(&mission).unwrap_err();
         assert!(matches!(err, VosaError::SafetyViolation(_)));
@@ -168,7 +186,7 @@ mod tests {
     fn hover_zero_duration_is_violation() {
         let mission = mission_with_safety(
             SafetyBlock::default(),
-            vec![Command::Hover { duration: 0.0 }],
+            vec![Statement::Command(Command::Hover { duration: 0.0 })],
         );
         let err = SafetySandbox::new().validate(&mission).unwrap_err();
         assert!(matches!(err, VosaError::SafetyViolation(_)));
@@ -179,7 +197,7 @@ mod tests {
         let mission = mission_with_flight_and_safety(
             SafetyBlock { max_speed: Some(10.0), ..Default::default() },
             FlightConfig { cruise_speed: Some(20.0), ..Default::default() },
-            vec![Command::Takeoff { altitude: 10.0 }],
+            vec![Statement::Command(Command::Takeoff { altitude: 10.0 })],
         );
         let err = SafetySandbox::new().validate(&mission).unwrap_err();
         assert!(matches!(err, VosaError::SafetyViolation(_)));
@@ -191,7 +209,7 @@ mod tests {
         let mission = mission_with_flight_and_safety(
             SafetyBlock { max_speed: Some(15.0), ..Default::default() },
             FlightConfig { cruise_speed: Some(8.0), ..Default::default() },
-            vec![Command::Takeoff { altitude: 10.0 }],
+            vec![Statement::Command(Command::Takeoff { altitude: 10.0 })],
         );
         assert!(SafetySandbox::new().validate(&mission).is_ok());
     }
@@ -204,9 +222,24 @@ mod tests {
             safety: None,
             flight: None,
             sequence: Sequence {
-                commands: vec![Command::Takeoff { altitude: 9999.0 }],
+                statements: vec![Statement::Command(Command::Takeoff { altitude: 9999.0 })],
             },
         };
         assert!(SafetySandbox::new().validate(&mission).is_ok());
+    }
+
+    #[test]
+    fn nested_repeat_violating_safety_fails() {
+        let mission = mission_with_safety(
+            SafetyBlock { max_altitude: Some(10.0), ..Default::default() },
+            vec![Statement::Repeat {
+                count: 5,
+                body: Sequence {
+                    statements: vec![Statement::Command(Command::Takeoff { altitude: 20.0 })],
+                },
+            }],
+        );
+        let err = SafetySandbox::new().validate(&mission).unwrap_err();
+        assert!(matches!(err, VosaError::SafetyViolation(_)));
     }
 }

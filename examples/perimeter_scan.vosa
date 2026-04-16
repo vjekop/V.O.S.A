@@ -10,7 +10,7 @@ mission "perimeter_scan" {
         min_altitude:    5m
         max_speed:       15m/s
         battery_reserve: 25%
-        geofence:        circle(center: home, radius: 500m)
+        geofence:        circle(lat: 38.897, lon: -77.036, radius: 500m)
         failsafe:        return_home
     }
 

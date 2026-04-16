@@ -9,12 +9,18 @@ Versions follow [Semantic Versioning](https://semver.org/).
 ## [Unreleased]
 
 ### Added
+- **Control Flow**: Added support for `if` statements and `repeat` loops (`TokenKind::If`, `TokenKind::Repeat`). 
+- **Simulated State Variables**: Introduced `battery` and relative operators (`<`, `>`), allowing logic branches (`if battery < 30% { return_home() }`).
+- **AST Restructuring**: Refactored `Sequence` to contain nested `Statement` elements to support deeper block depths instead of un-nested flattened `Command` trees. 
+- **Recursive Security Models**: Updated `SafetySandbox` validating commands nested deep within loops structurally prior to execution.
+- **Simulated Battery Drain**: Introduced heuristic-based battery depletion traversing waypoints measuring haversine displacement.
 - **Speed Enforcement**: The `SafetySandbox` now statically verifies that `flight.cruise_speed` does not exceed `safety.max_speed`.
 - **Geofence Enforcement**: The `Runtime` loop now validates every waypoint dynamically. If a waypoint exceeds the geofence radius from the center, the mission aborts via a `SafetyViolation`.
 - **Coordinate-based Geofence**: The parser now supports `circle(lat: X, lon: Y, radius: Z)` in addition to `center: home`. This is required so the simulator can run geofences without "home" being dynamically locked in by hardware.
 - **Unit & Integration Tests**: Added test suites for the `SafetySandbox`, `haversine` distance math, and `Runtime` geofence module.
 
 ### Fixed
+- Migrated default geofencing into static `lat`/`lon` points for previously broken backwards compatibility upon introducing geofence limits in simulation bounds.
 - Fixed an unmatched `expect_quantity` warning in the parser component.
 
 ---

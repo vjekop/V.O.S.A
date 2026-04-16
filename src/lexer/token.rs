@@ -46,6 +46,8 @@ pub enum TokenKind {
     Flight,
     Sequence,
     Vehicle,
+    Repeat,
+    If,
 
     // ── Named values / labels ─────────────────────────────────────────────────
     /// `home` — the launch/home position
@@ -97,6 +99,9 @@ pub enum TokenKind {
     Duration,
     Action,
     Resolution,
+    
+    // ── State variables ───────────────────────────────────────────────────────
+    Battery,
 
     // ── Generic identifier (for anything not a keyword) ───────────────────────
     Ident(String),
@@ -108,6 +113,8 @@ pub enum TokenKind {
     RParen,
     Colon,
     Comma,
+    LessThan,
+    GreaterThan,
 
     // ── Sentinel ──────────────────────────────────────────────────────────────
     Eof,
