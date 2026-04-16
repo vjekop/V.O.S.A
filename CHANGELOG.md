@@ -9,6 +9,9 @@ Versions follow [Semantic Versioning](https://semver.org/).
 ## [Unreleased]
 
 ### Added
+- **Parallel Control Flow**: Added `parallel { ... }` structural block parsing and execution logic, enabling commands like camera recording to run simultaneously alongside positional waypoints.
+- **MAVLink Hardware Bridge**: Created a MVP `MavlinkBridge` allowing AST translation directly into MAV_CMD packets rather than simulations.
+- **Hardware CLI Integration**: Added a `--mavlink <CONN_STR>` flag so developers can connect missions over TCP/UDP.
 - **Control Flow**: Added support for `if` statements and `repeat` loops (`TokenKind::If`, `TokenKind::Repeat`). 
 - **Simulated State Variables**: Introduced `battery` and relative operators (`<`, `>`), allowing logic branches (`if battery < 30% { return_home() }`).
 - **AST Restructuring**: Refactored `Sequence` to contain nested `Statement` elements to support deeper block depths instead of un-nested flattened `Command` trees. 

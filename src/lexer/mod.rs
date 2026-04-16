@@ -201,6 +201,7 @@ impl Lexer {
             "vehicle"       => TokenKind::Vehicle,
             "repeat"        => TokenKind::Repeat,
             "if"            => TokenKind::If,
+            "parallel"      => TokenKind::Parallel,
             // Named values
             "home"          => TokenKind::Home,
             "circle"        => TokenKind::Circle,

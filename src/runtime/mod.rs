@@ -135,6 +135,13 @@ impl Runtime {
                     }
                 }
             }
+            Statement::Parallel { body } => {
+                self.log("[PARALLEL] Dispatching concurrent block");
+                // In simulation, we execute sequentially but log it as concurrent
+                for inner_stmt in &body.statements {
+                    self.execute_statement(inner_stmt, safety)?;
+                }
+            }
         }
         Ok(())
     }

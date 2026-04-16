@@ -9,6 +9,7 @@ pub mod lexer;
 pub mod parser;
 pub mod safety;
 pub mod runtime;
+pub mod hw_bridge;
 
 pub use error::VosaError;
 

@@ -26,6 +26,9 @@ enum Command {
         /// Print the parsed AST before running
         #[arg(short, long)]
         ast: bool,
+        /// MAVLink connection string (e.g. tcp:127.0.0.1:5760). If provided, runs against hardware instead of simulator.
+        #[arg(long, value_name = "CONN_STR")]
+        mavlink: Option<String>,
     },
     /// Validate a .vosa file without executing
     Check {
@@ -40,7 +43,7 @@ fn main() {
     let cli = Cli::parse();
 
     match cli.command {
-        Command::Run { file, ast } => cmd_run(file, ast),
+        Command::Run { file, ast, mavlink } => cmd_run(file, ast, mavlink),
         Command::Check { file }   => cmd_check(file),
         Command::Docs             => cmd_docs(),
     }
@@ -56,7 +59,7 @@ fn read_file(path: &PathBuf) -> String {
     }
 }
 
-fn cmd_run(file: PathBuf, print_ast: bool) {
+fn cmd_run(file: PathBuf, print_ast: bool, mavlink: Option<String>) {
     println!("{}", banner());
     let src = read_file(&file);
 
@@ -82,8 +85,16 @@ fn cmd_run(file: PathBuf, print_ast: bool) {
     println!("{} All safety constraints passed.", "✔".green().bold());
 
     // Execute
-    let mut rt = vosa::runtime::Runtime::new();
-    match rt.execute(&mission) {
+    let result = if let Some(conn) = mavlink {
+        println!("{}", "── MAVLink Execution ──".magenta().bold());
+        let mut bridge = vosa::hw_bridge::MavlinkBridge::new(&conn);
+        bridge.execute(&mission)
+    } else {
+        let mut rt = vosa::runtime::Runtime::new();
+        rt.execute(&mission)
+    };
+
+    match result {
         Ok(report) => {
             println!("\n{}", "── Execution Log ──".cyan().bold());
             for step in &report.steps {

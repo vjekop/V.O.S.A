@@ -198,9 +198,9 @@ See the [`examples/`](examples/) directory:
 
 ## Roadmap
 
-- [ ] Speed validation in safety sandbox
-- [ ] Geofence boundary checking for each waypoint
-- [ ] `loop` and `if battery <` control flow
+- [x] Speed validation in safety sandbox
+- [x] Geofence boundary checking for each waypoint
+- [x] `loop` and `if battery <` control flow
 - [ ] MAVLink output bridge (real hardware)
 - [ ] ROS 2 node publisher
 - [ ] WASM build (browser mission planner)

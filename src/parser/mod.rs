@@ -293,6 +293,7 @@ impl Parser {
         match self.peek().clone() {
             TokenKind::Repeat => self.parse_repeat(),
             TokenKind::If => self.parse_if(),
+            TokenKind::Parallel => self.parse_parallel(),
             _ => Ok(Statement::Command(self.parse_command()?)),
         }
     }
@@ -307,6 +308,12 @@ impl Parser {
         
         let body = self.parse_sequence()?;
         Ok(Statement::Repeat { count, body })
+    }
+
+    fn parse_parallel(&mut self) -> Result<Statement, VosaError> {
+        self.expect(&TokenKind::Parallel)?;
+        let body = self.parse_sequence()?;
+        Ok(Statement::Parallel { body })
     }
 
     fn parse_if(&mut self) -> Result<Statement, VosaError> {

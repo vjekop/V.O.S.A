@@ -1,0 +1,38 @@
+mission "concurrent_survey" {
+    vehicle: Quadcopter
+
+    safety {
+        max_altitude: 100m
+        min_altitude: 5m
+        max_speed: 15m/s
+        battery_reserve: 20%
+        geofence: circle(lat: 38.897, lon: -77.036, radius: 1000m)
+        failsafe: return_home
+    }
+
+    flight {
+        cruise_altitude: 40m
+        cruise_speed: 8m/s
+    }
+
+    sequence {
+        takeoff(40m)
+        
+        repeat 2 {
+            parallel {
+                waypoint(lat: 38.8971, lon: -77.0361, alt: 40m)
+                camera(action: record, resolution: "4K")
+            }
+            
+            waypoint(lat: 38.8972, lon: -77.0362, alt: 40m)
+            
+            parallel {
+                hover(5s)
+                camera(action: stop)
+            }
+        }
+        
+        return_home()
+        land()
+    }
+}

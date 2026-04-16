@@ -48,6 +48,7 @@ pub enum TokenKind {
     Vehicle,
     Repeat,
     If,
+    Parallel,
 
     // ── Named values / labels ─────────────────────────────────────────────────
     /// `home` — the launch/home position

@@ -64,6 +64,11 @@ impl SafetySandbox {
                     self.check_statement(inner_stmt, safety)?;
                 }
             }
+            Statement::Parallel { body } => {
+                for inner_stmt in &body.statements {
+                    self.check_statement(inner_stmt, safety)?;
+                }
+            }
         }
         Ok(())
     }
@@ -127,7 +132,7 @@ mod tests {
     use super::*;
     use crate::parser::ast::*;
 
-    fn mission_with_safety(safety: SafetyBlock, commands: Vec<Command>) -> Mission {
+    fn mission_with_safety(safety: SafetyBlock, statements: Vec<Statement>) -> Mission {
         Mission {
             name: "test".into(),
             vehicle: None,

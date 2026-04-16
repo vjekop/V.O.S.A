@@ -98,6 +98,8 @@ pub enum Statement {
         threshold_percent: f64,
         body: Sequence,
     },
+    /// Execute inner sequence concurrently
+    Parallel { body: Sequence },
 }
 
 #[derive(Debug, Clone, PartialEq)]
