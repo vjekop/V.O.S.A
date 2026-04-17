@@ -335,13 +335,14 @@ fn monitor_mission<C: MavConnection<MavMessage>>(
     item_count: usize,
     steps: &mut Vec<crate::runtime::ExecutionStep>,
 ) -> Result<(), VosaError> {
-    // Send a GCS heartbeat every ~1 s so PX4 never triggers its GCS-lost failsafe.
-    let mut heartbeat_counter: u32 = 0;
+    // Send a GCS heartbeat every 1 s based on wall-clock time, not message count.
+    // PX4 triggers a GCS-lost failsafe if it doesn't receive a heartbeat for >3 s.
+    let mut last_heartbeat = std::time::Instant::now();
     loop {
-        // Send heartbeat every 10 messages (~1 s at 10 Hz recv rate)
-        heartbeat_counter += 1;
-        if heartbeat_counter % 10 == 0 {
+        // Always heartbeat on time regardless of incoming message rate
+        if last_heartbeat.elapsed() >= std::time::Duration::from_secs(1) {
             let _ = vehicle.send_default(&gcs_heartbeat());
+            last_heartbeat = std::time::Instant::now();
         }
 
         match vehicle.recv() {
