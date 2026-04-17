@@ -1,0 +1,88 @@
+// reactive_mission.vosa
+//
+// Demonstrates VOSA reactive triggers: the drone responds autonomously to
+// changing conditions without any human intervention mid-flight.
+//
+// Triggers registered with `on` are evaluated after every command. When a
+// condition transitions from false → true, the trigger body fires once. It
+// resets automatically and can re-fire if the condition recurs.
+//
+// Run this mission with:
+//   vosa run examples/reactive_mission.vosa
+
+mission "reactive_survey" {
+
+  vehicle: Quadcopter
+
+  safety {
+    max_altitude: 120m
+    min_altitude: 10m
+    max_speed: 15m/s
+    battery_reserve: 10%
+    failsafe: return_home
+    geofence: circle(center: home, radius: 2000m)
+  }
+
+  flight {
+    cruise_altitude: 60m
+    cruise_speed: 10m/s
+  }
+
+  sequence {
+
+    // ── Reactive triggers ──────────────────────────────────────────────────
+    // Register all triggers before takeoff. They remain active for the entire
+    // mission and fire whenever their condition is first satisfied.
+
+    // If battery drops below 20%, abort immediately and come home.
+    on battery < 20% {
+      return_home()
+      land()
+    }
+
+    // If battery drops below 40%, pause and hover to log a warning before
+    // continuing. (In production, this would emit a low-battery telemetry alert.)
+    on battery < 40% {
+      hover(15s)
+    }
+
+    // If wind exceeds 12 m/s, descend to a safer altitude and hold.
+    on wind > 12m/s {
+      hover(30s)
+    }
+
+    // If an obstacle is detected, halt and return home.
+    // In simulation this never fires (requires live sensor data).
+    // On real hardware this hooks into the collision-avoidance sensor feed.
+    on obstacle_detected {
+      hover(5s)
+      return_home()
+      land()
+    }
+
+    // ── Flight plan ────────────────────────────────────────────────────────
+
+    takeoff(60m)
+
+    // Outbound survey legs — triggers are evaluated after each waypoint.
+    waypoint(lat: 37.7750, lon: -122.4195, alt: 60m)
+    waypoint(lat: 37.7760, lon: -122.4195, alt: 60m)
+    waypoint(lat: 37.7770, lon: -122.4195, alt: 60m)
+    waypoint(lat: 37.7780, lon: -122.4195, alt: 60m)
+    waypoint(lat: 37.7790, lon: -122.4195, alt: 60m)
+
+    camera(action: photo, resolution: "4K")
+
+    // Cross-legs
+    waypoint(lat: 37.7790, lon: -122.4185, alt: 60m)
+    waypoint(lat: 37.7780, lon: -122.4185, alt: 60m)
+    waypoint(lat: 37.7770, lon: -122.4185, alt: 60m)
+    waypoint(lat: 37.7760, lon: -122.4185, alt: 60m)
+    waypoint(lat: 37.7750, lon: -122.4185, alt: 60m)
+
+    camera(action: photo, resolution: "4K")
+
+    return_home()
+    land()
+  }
+}

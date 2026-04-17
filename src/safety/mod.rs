@@ -54,17 +54,10 @@ impl SafetySandbox {
     fn check_statement(&self, stmt: &Statement, safety: &SafetyBlock) -> Result<(), VosaError> {
         match stmt {
             Statement::Command(cmd) => self.check_command(cmd, safety)?,
-            Statement::Repeat { body, .. } => {
-                for inner_stmt in &body.statements {
-                    self.check_statement(inner_stmt, safety)?;
-                }
-            }
-            Statement::IfBattery { body, .. } => {
-                for inner_stmt in &body.statements {
-                    self.check_statement(inner_stmt, safety)?;
-                }
-            }
-            Statement::Parallel { body } => {
+            Statement::Repeat { body, .. }
+            | Statement::IfBattery { body, .. }
+            | Statement::Parallel { body }
+            | Statement::OnCondition { body, .. } => {
                 for inner_stmt in &body.statements {
                     self.check_statement(inner_stmt, safety)?;
                 }

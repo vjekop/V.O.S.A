@@ -101,8 +101,17 @@ pub enum TokenKind {
     Action,
     Resolution,
     
-    // ── State variables ───────────────────────────────────────────────────────
+    // ── State variables / trigger conditions ─────────────────────────────────
+    /// `battery` — current battery level (%)
     Battery,
+    /// `wind` — current wind speed (m/s)
+    Wind,
+    /// `obstacle_detected` — boolean sensor signal
+    ObstacleDetected,
+
+    // ── Reactive trigger keyword ──────────────────────────────────────────────
+    /// `on` — introduces a reactive trigger block
+    On,
 
     // ── Generic identifier (for anything not a keyword) ───────────────────────
     Ident(String),

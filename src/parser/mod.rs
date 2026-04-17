@@ -291,9 +291,10 @@ impl Parser {
 
     fn parse_statement(&mut self) -> Result<Statement, VosaError> {
         match self.peek().clone() {
-            TokenKind::Repeat => self.parse_repeat(),
-            TokenKind::If => self.parse_if(),
+            TokenKind::Repeat   => self.parse_repeat(),
+            TokenKind::If       => self.parse_if(),
             TokenKind::Parallel => self.parse_parallel(),
+            TokenKind::On       => self.parse_on(),
             _ => Ok(Statement::Command(self.parse_command()?)),
         }
     }
@@ -343,6 +344,54 @@ impl Parser {
             threshold_percent,
             body
         })
+    }
+
+    /// Parse a reactive `on <condition> { ... }` trigger block.
+    ///
+    /// Supported conditions:
+    /// - `on battery < 20% { ... }`
+    /// - `on battery > 50% { ... }`
+    /// - `on wind > 15m/s { ... }`
+    /// - `on wind < 5m/s { ... }`
+    /// - `on obstacle_detected { ... }`
+    fn parse_on(&mut self) -> Result<Statement, VosaError> {
+        self.expect(&TokenKind::On)?;
+
+        let condition = match self.consume() {
+            TokenKind::Battery => {
+                let operator = match self.consume() {
+                    TokenKind::LessThan    => Operator::LessThan,
+                    TokenKind::GreaterThan => Operator::GreaterThan,
+                    other => return Err(self.parse_err(format!("expected '<' or '>' after 'battery', got {:?}", other))),
+                };
+                let threshold_percent = match self.consume() {
+                    TokenKind::Quantity(v, Unit::Percent) => v,
+                    TokenKind::Number(v) => v,
+                    other => return Err(self.parse_err(format!("expected battery % threshold, got {:?}", other))),
+                };
+                TriggerCondition::Battery { operator, threshold_percent }
+            }
+            TokenKind::Wind => {
+                let operator = match self.consume() {
+                    TokenKind::LessThan    => Operator::LessThan,
+                    TokenKind::GreaterThan => Operator::GreaterThan,
+                    other => return Err(self.parse_err(format!("expected '<' or '>' after 'wind', got {:?}", other))),
+                };
+                let threshold_ms = match self.consume() {
+                    TokenKind::Quantity(v, Unit::MetersPerSecond) => v,
+                    TokenKind::Number(v) => v,
+                    other => return Err(self.parse_err(format!("expected wind speed (m/s) threshold, got {:?}", other))),
+                };
+                TriggerCondition::Wind { operator, threshold_ms }
+            }
+            TokenKind::ObstacleDetected => TriggerCondition::ObstacleDetected,
+            other => return Err(self.parse_err(format!(
+                "'on' supports: battery, wind, obstacle_detected — got {:?}", other
+            ))),
+        };
+
+        let body = self.parse_sequence()?;
+        Ok(Statement::OnCondition { condition, body })
     }
 
     fn parse_command(&mut self) -> Result<Command, VosaError> {

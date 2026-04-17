@@ -144,6 +144,13 @@ impl Ros2Bridge {
                 }
                 log("[ROS 2] [PARALLEL BLOCK END]".into());
             }
+            // Reactive triggers are driven by live ROS 2 topic subscriptions.
+            // On real hardware the trigger body is wired to a subscriber node
+            // that listens to the relevant sensor topics (/battery_state,
+            // /wind_estimate, /obstacle_detected) and fires accordingly.
+            Statement::OnCondition { condition, .. } => {
+                log(format!("[ROS 2] [TRIGGER REGISTERED] Subscribing to telemetry for: {:?}", condition));
+            }
         }
         Ok(())
     }

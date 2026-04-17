@@ -17,10 +17,33 @@ pub struct ExecutionStep {
     pub description: String,
 }
 
+/// A registered reactive trigger with its fired-state for edge detection.
+///
+/// Triggers use rising-edge semantics: the body executes once when the condition
+/// transitions from false → true. It resets automatically when the condition
+/// becomes false again, allowing it to re-fire if the situation recurs.
+struct ActiveTrigger {
+    condition: TriggerCondition,
+    body: Sequence,
+    /// True while the condition is currently satisfied (prevents re-firing)
+    fired: bool,
+}
+
 /// The VOSA runtime simulates mission execution and produces an `ExecutionReport`.
 ///
 /// In a real deployment this layer would emit MAVLink packets or ROS 2 messages.
 /// In simulation mode it logs every action and tracks position / distance.
+///
+/// ## Reactive trigger system
+/// `on` blocks are registered as active triggers when the runtime encounters them
+/// in the sequence. After every command, all registered triggers are evaluated
+/// against current environmental state. When a condition transitions false → true,
+/// the trigger body is executed immediately before the mission resumes.
+///
+/// ## Simulated environment
+/// - **Battery**: starts at 100%, drains at 1% per 500m of lateral flight.
+/// - **Wind**: starts at 3 m/s, increases by 1 m/s per 3 waypoints reached.
+/// - **Obstacle**: always false in simulation (requires live sensor input).
 ///
 /// ## Dynamic safety checks performed here
 /// - **Geofence boundary**: each `Waypoint` is checked against the declared
@@ -39,8 +62,16 @@ pub struct Runtime {
     total_distance: f64,
     /// Highest altitude reached (metres)
     max_alt: f64,
-    /// Simulated battery
+    /// Simulated battery level (%)
     battery_percent: f64,
+    /// Simulated wind speed (m/s) — increases with waypoints visited
+    wind_speed_ms: f64,
+    /// Number of waypoints reached (used for wind simulation)
+    waypoints_visited: u32,
+    /// Whether an obstacle has been detected (always false in simulation)
+    obstacle_detected: bool,
+    /// All registered `on` triggers accumulated during sequence execution
+    triggers: Vec<ActiveTrigger>,
 }
 
 impl Runtime {
@@ -53,6 +84,10 @@ impl Runtime {
             total_distance: 0.0,
             max_alt: 0.0,
             battery_percent: 100.0,
+            wind_speed_ms: 3.0,
+            waypoints_visited: 0,
+            obstacle_detected: false,
+            triggers: Vec::new(),
         }
     }
 
@@ -89,8 +124,10 @@ impl Runtime {
             }
         }
 
-        for stmt in &mission.sequence.statements {
-            self.execute_statement(stmt, mission.safety.as_ref())?;
+        self.log(format!("[ENV] Initial wind: {:.1}m/s", self.wind_speed_ms));
+
+        for stmt in &mission.sequence.statements.clone() {
+            self.execute_statement(&stmt, mission.safety.as_ref())?;
         }
 
         self.log("[MISSION] Complete.");
@@ -103,46 +140,93 @@ impl Runtime {
         })
     }
 
-    /// Execute statements handling repeats and battery thresholds natively.
+    /// Execute a statement, handling repeats, conditionals, parallel blocks, and triggers.
     fn execute_statement(
         &mut self,
         stmt: &Statement,
         safety: Option<&SafetyBlock>,
     ) -> Result<(), VosaError> {
         match stmt {
-            Statement::Command(cmd) => self.execute_command(cmd, safety)?,
+            Statement::Command(cmd) => {
+                self.execute_command(cmd, safety)?;
+                // Evaluate reactive triggers after every command
+                self.check_triggers(safety)?;
+            }
             Statement::Repeat { count, body } => {
                 for i in 0..*count {
                     self.log(format!("[REPEAT] Iteration {}/{}", i + 1, count));
-                    for inner_stmt in &body.statements {
-                        self.execute_statement(inner_stmt, safety)?;
+                    for inner_stmt in &body.statements.clone() {
+                        self.execute_statement(&inner_stmt, safety)?;
                     }
                 }
             }
             Statement::IfBattery { operator, threshold_percent, body } => {
                 let current_battery = self.battery_percent;
                 let condition_met = match operator {
-                    Operator::LessThan => current_battery < *threshold_percent,
+                    Operator::LessThan    => current_battery < *threshold_percent,
                     Operator::GreaterThan => current_battery > *threshold_percent,
                 };
-                
                 let op_str = if *operator == Operator::LessThan { "<" } else { ">" };
-                self.log(format!("[IF BATTERY] {} {}% — condition is {}", current_battery, op_str, condition_met));
-                
+                self.log(format!(
+                    "[IF BATTERY] {:.1}% {} {}% — condition is {}",
+                    current_battery, op_str, threshold_percent, condition_met
+                ));
                 if condition_met {
-                    for inner_stmt in &body.statements {
-                        self.execute_statement(inner_stmt, safety)?;
+                    for inner_stmt in &body.statements.clone() {
+                        self.execute_statement(&inner_stmt, safety)?;
                     }
                 }
             }
             Statement::Parallel { body } => {
                 self.log("[PARALLEL] Dispatching concurrent block");
-                // In simulation, we execute sequentially but log it as concurrent
-                for inner_stmt in &body.statements {
-                    self.execute_statement(inner_stmt, safety)?;
+                for inner_stmt in &body.statements.clone() {
+                    self.execute_statement(&inner_stmt, safety)?;
                 }
             }
+            Statement::OnCondition { condition, body } => {
+                // Register the trigger — it will be evaluated after each subsequent command.
+                let label = condition_label(condition);
+                self.log(format!("[TRIGGER] Registered: on {label}"));
+                self.triggers.push(ActiveTrigger {
+                    condition: condition.clone(),
+                    body: body.clone(),
+                    fired: false,
+                });
+            }
         }
+        Ok(())
+    }
+
+    /// Evaluate all registered triggers against current environmental state.
+    /// Fires the body of any trigger whose condition just became true (rising edge).
+    fn check_triggers(&mut self, safety: Option<&SafetyBlock>) -> Result<(), VosaError> {
+        // Snapshot state so borrow checker doesn't complain
+        let battery = self.battery_percent;
+        let wind = self.wind_speed_ms;
+        let obstacle = self.obstacle_detected;
+
+        let mut to_fire: Vec<usize> = Vec::new();
+
+        for (i, trigger) in self.triggers.iter_mut().enumerate() {
+            let condition_met = eval_condition(&trigger.condition, battery, wind, obstacle);
+            if condition_met && !trigger.fired {
+                trigger.fired = true;
+                to_fire.push(i);
+            } else if !condition_met {
+                // Reset so the trigger can re-fire if the condition recurs
+                trigger.fired = false;
+            }
+        }
+
+        for i in to_fire {
+            let label = condition_label(&self.triggers[i].condition);
+            self.log(format!("[TRIGGER] FIRED: on {label}"));
+            let body = self.triggers[i].body.clone();
+            for stmt in &body.statements {
+                self.execute_statement(stmt, safety)?;
+            }
+        }
+
         Ok(())
     }
 
@@ -173,8 +257,6 @@ impl Runtime {
 
             Command::Waypoint { lat, lon, alt } => {
                 // ── Geofence boundary check ───────────────────────────────────
-                // Before moving to this waypoint, verify it lies within the
-                // declared geofence. Violation aborts the mission immediately.
                 if let Some(safety) = safety {
                     if let Some(Geofence::Circle { center, radius }) = &safety.geofence {
                         let (fence_lat, fence_lon) = match center {
@@ -198,8 +280,12 @@ impl Runtime {
                 self.current_lon = *lon;
                 self.current_alt = *alt;
                 self.max_alt = self.max_alt.max(*alt);
+                self.waypoints_visited += 1;
+                self.simulate_wind();
                 self.log(format!(
-                    "[WAYPOINT] → ({lat:.4}°, {lon:.4}°) alt {alt}m  [{dist:.0}m leg]"
+                    "[WAYPOINT] → ({lat:.4}°, {lon:.4}°) alt {alt}m  [{dist:.0}m leg]  \
+                     [batt {:.1}%]  [wind {:.1}m/s]",
+                    self.battery_percent, self.wind_speed_ms
                 ));
             }
 
@@ -219,18 +305,59 @@ impl Runtime {
         }
         Ok(())
     }
+
     fn drain_battery(&mut self, distance_m: f64) {
-        // Simple simulator heuristic: 1% drain per 500m
+        // 1% drain per 500m
         self.battery_percent -= distance_m / 500.0;
         if self.battery_percent < 0.0 {
             self.battery_percent = 0.0;
         }
+    }
+
+    /// Simulate wind increasing with flight time (1 m/s per 3 waypoints).
+    fn simulate_wind(&mut self) {
+        self.wind_speed_ms = 3.0 + (self.waypoints_visited / 3) as f64;
     }
 }
 
 impl Default for Runtime {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+/// Evaluate a trigger condition against current environmental state.
+fn eval_condition(
+    condition: &TriggerCondition,
+    battery: f64,
+    wind: f64,
+    obstacle: bool,
+) -> bool {
+    match condition {
+        TriggerCondition::Battery { operator, threshold_percent } => match operator {
+            Operator::LessThan    => battery < *threshold_percent,
+            Operator::GreaterThan => battery > *threshold_percent,
+        },
+        TriggerCondition::Wind { operator, threshold_ms } => match operator {
+            Operator::LessThan    => wind < *threshold_ms,
+            Operator::GreaterThan => wind > *threshold_ms,
+        },
+        TriggerCondition::ObstacleDetected => obstacle,
+    }
+}
+
+/// Human-readable label for a trigger condition (used in log output).
+fn condition_label(condition: &TriggerCondition) -> String {
+    match condition {
+        TriggerCondition::Battery { operator, threshold_percent } => {
+            let op = if *operator == Operator::LessThan { "<" } else { ">" };
+            format!("battery {op} {threshold_percent}%")
+        }
+        TriggerCondition::Wind { operator, threshold_ms } => {
+            let op = if *operator == Operator::LessThan { "<" } else { ">" };
+            format!("wind {op} {threshold_ms}m/s")
+        }
+        TriggerCondition::ObstacleDetected => "obstacle_detected".to_string(),
     }
 }
 
@@ -274,13 +401,11 @@ mod tests {
         );
         let report = Runtime::new().execute(&m).unwrap();
         assert!((report.max_altitude_m - 25.0).abs() < 0.01);
-        assert!((report.total_distance_m).abs() < 0.01); // no lateral movement
+        assert!((report.total_distance_m).abs() < 0.01);
     }
 
     #[test]
     fn waypoint_within_geofence_passes() {
-        // Fence: 1000m radius from (0.0, 0.0)
-        // Waypoint: ~111m north — well within fence
         let m = simple_mission(
             Some(SafetyBlock {
                 geofence: Some(Geofence::Circle {
@@ -300,8 +425,6 @@ mod tests {
 
     #[test]
     fn waypoint_outside_geofence_is_safety_violation() {
-        // Fence: 100m radius from (0.0, 0.0)
-        // Waypoint: ~111m north — just outside fence
         let m = simple_mission(
             Some(SafetyBlock {
                 geofence: Some(Geofence::Circle {
@@ -318,6 +441,102 @@ mod tests {
         let err = Runtime::new().execute(&m).unwrap_err();
         assert!(matches!(err, VosaError::SafetyViolation(_)));
         assert!(err.to_string().contains("geofence"));
+    }
+
+    #[test]
+    fn battery_trigger_fires_when_condition_met() {
+        // Battery starts at 100%. Drain it with a long waypoint (~1000m), then
+        // check that an `on battery < 99%` trigger fires.
+        let m = simple_mission(
+            None,
+            vec![
+                Statement::OnCondition {
+                    condition: TriggerCondition::Battery {
+                        operator: Operator::LessThan,
+                        threshold_percent: 99.0,
+                    },
+                    body: Sequence {
+                        statements: vec![Statement::Command(Command::Hover { duration: 5.0 })],
+                    },
+                },
+                Statement::Command(Command::Takeoff { altitude: 20.0 }),
+                // ~1km leg drains ~2% battery
+                Statement::Command(Command::Waypoint { lat: 0.009, lon: 0.0, alt: 20.0 }),
+                Statement::Command(Command::Land),
+            ],
+        );
+        let report = Runtime::new().execute(&m).unwrap();
+        // Trigger should have fired — find the TRIGGER FIRED step
+        let fired = report
+            .steps
+            .iter()
+            .any(|s| s.description.contains("[TRIGGER] FIRED"));
+        assert!(fired, "expected battery trigger to fire, steps: {:#?}", report.steps);
+    }
+
+    #[test]
+    fn wind_trigger_fires_when_wind_exceeds_threshold() {
+        // Wind starts at 3m/s and increases after waypoints. After 3 waypoints it
+        // reaches 4m/s. Trigger on wind > 3.5m/s should fire.
+        let waypoints: Vec<Statement> = (0..4)
+            .map(|i| {
+                Statement::Command(Command::Waypoint {
+                    lat: i as f64 * 0.001,
+                    lon: 0.0,
+                    alt: 30.0,
+                })
+            })
+            .collect();
+
+        let mut stmts = vec![
+            Statement::OnCondition {
+                condition: TriggerCondition::Wind {
+                    operator: Operator::GreaterThan,
+                    threshold_ms: 3.5,
+                },
+                body: Sequence {
+                    statements: vec![Statement::Command(Command::Hover { duration: 10.0 })],
+                },
+            },
+            Statement::Command(Command::Takeoff { altitude: 30.0 }),
+        ];
+        stmts.extend(waypoints);
+        stmts.push(Statement::Command(Command::Land));
+
+        let m = simple_mission(None, stmts);
+        let report = Runtime::new().execute(&m).unwrap();
+        let fired = report
+            .steps
+            .iter()
+            .any(|s| s.description.contains("[TRIGGER] FIRED"));
+        assert!(fired, "expected wind trigger to fire");
+    }
+
+    #[test]
+    fn trigger_does_not_fire_when_condition_never_met() {
+        // Battery threshold set very low — should never fire in a short mission.
+        let m = simple_mission(
+            None,
+            vec![
+                Statement::OnCondition {
+                    condition: TriggerCondition::Battery {
+                        operator: Operator::LessThan,
+                        threshold_percent: 1.0,
+                    },
+                    body: Sequence {
+                        statements: vec![Statement::Command(Command::ReturnHome)],
+                    },
+                },
+                Statement::Command(Command::Takeoff { altitude: 10.0 }),
+                Statement::Command(Command::Land),
+            ],
+        );
+        let report = Runtime::new().execute(&m).unwrap();
+        let fired = report
+            .steps
+            .iter()
+            .any(|s| s.description.contains("[TRIGGER] FIRED"));
+        assert!(!fired, "trigger should not have fired");
     }
 
     #[test]

@@ -240,8 +240,12 @@ impl Lexer {
             "duration"      => TokenKind::Duration,
             "action"        => TokenKind::Action,
             "resolution"    => TokenKind::Resolution,
-            // State
-            "battery"       => TokenKind::Battery,
+            // State / trigger conditions
+            "battery"           => TokenKind::Battery,
+            "wind"              => TokenKind::Wind,
+            "obstacle_detected" => TokenKind::ObstacleDetected,
+            // Reactive trigger
+            "on"                => TokenKind::On,
             // Booleans
             "true"          => TokenKind::Bool(true),
             "false"         => TokenKind::Bool(false),

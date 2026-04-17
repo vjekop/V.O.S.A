@@ -100,12 +100,38 @@ pub enum Statement {
     },
     /// Execute inner sequence concurrently
     Parallel { body: Sequence },
+    /// Register a reactive trigger: body executes whenever `condition` becomes true
+    OnCondition {
+        condition: TriggerCondition,
+        body: Sequence,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Operator {
     LessThan,
     GreaterThan,
+}
+
+/// A condition evaluated continuously during mission execution.
+///
+/// Triggers fire on the rising edge — i.e. when the condition transitions
+/// from false to true. They reset automatically when the condition becomes
+/// false again, so they can re-fire if the situation recurs.
+#[derive(Debug, Clone)]
+pub enum TriggerCondition {
+    /// Fires when battery % crosses the threshold in the specified direction
+    Battery {
+        operator: Operator,
+        threshold_percent: f64,
+    },
+    /// Fires when wind speed (m/s) crosses the threshold
+    Wind {
+        operator: Operator,
+        threshold_ms: f64,
+    },
+    /// Fires when an obstacle is detected by onboard sensors
+    ObstacleDetected,
 }
 
 #[derive(Debug, Clone)]

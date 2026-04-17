@@ -156,7 +156,7 @@ fn banner() -> String {
 
 const DOCS: &str = r#"
 ╔══════════════════════════════════════════════════════════╗
-║           V.O.S.A. Language Reference  v0.1             ║
+║           V.O.S.A. Language Reference  v0.2             ║
 ╚══════════════════════════════════════════════════════════╝
 
 A VOSA program is a single 'mission' block containing optional
@@ -182,14 +182,55 @@ vehicle, safety, and flight sub-blocks, plus a required sequence.
       }
 
       sequence {
+          // Commands
           takeoff(<number>m)
           waypoint(lat: <f64>, lon: <f64>, alt: <number>m)
           hover(<number>s)
           camera(action: record | photo | stop, resolution: "4K")
           return_home()
           land()
+
+          // Control flow
+          repeat <n> { ... }
+          if battery < <n>% { ... }
+          parallel { ... }
+
+          // Reactive triggers
+          on battery < <n>% { ... }
+          on battery > <n>% { ... }
+          on wind    < <n>m/s { ... }
+          on wind    > <n>m/s { ... }
+          on obstacle_detected { ... }
       }
   }
+
+─── Reactive Triggers ───────────────────────────────────────
+  Triggers are registered at the point they appear in the sequence
+  and remain active for the rest of the mission. The body fires
+  once each time the condition transitions from false → true
+  (rising-edge semantics). The trigger resets automatically when
+  the condition becomes false again.
+
+  Example:
+    on battery < 20% {
+      return_home()
+      land()
+    }
+
+    on wind > 12m/s {
+      hover(30s)
+    }
+
+    on obstacle_detected {
+      hover(5s)
+      return_home()
+      land()
+    }
+
+  Supported conditions:
+    battery < | > <percent>%      Current battery level
+    wind    < | > <speed>m/s      Current wind speed
+    obstacle_detected             Sensor obstacle signal
 
 ─── Vehicle Types ───────────────────────────────────────────
   Quadcopter | FixedWing | Hexacopter
@@ -205,8 +246,16 @@ vehicle, safety, and flight sub-blocks, plus a required sequence.
   // This is a line comment
 
 ─── CLI Usage ───────────────────────────────────────────────
-  vosa run   <file.vosa>        Simulate a mission
-  vosa run   <file.vosa> --ast  Show parsed AST + simulate
-  vosa check <file.vosa>        Validate without running
-  vosa docs                     Show this reference
+  vosa run   <file.vosa>          Simulate a mission
+  vosa run   <file.vosa> --ast    Show parsed AST + simulate
+  vosa run   <file.vosa> --mavlink tcp:127.0.0.1:5760
+  vosa run   <file.vosa> --ros2 0
+  vosa check <file.vosa>          Validate without running
+  vosa docs                       Show this reference
+
+─── Examples ────────────────────────────────────────────────
+  examples/hello_world.vosa       Minimal takeoff and land
+  examples/perimeter_scan.vosa    Geofenced perimeter survey
+  examples/reactive_mission.vosa  Reactive triggers (battery, wind, obstacle)
+  examples/parallel_survey.vosa   Parallel multi-drone blocks
 "#;

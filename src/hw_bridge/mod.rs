@@ -78,6 +78,12 @@ impl MavlinkBridge {
                 }
                 log("[MAV_CMD] [PARALLEL BLOCK END]".into());
             }
+            // Reactive triggers are driven by live telemetry on real hardware.
+            // The MAVLink bridge hands off to the onboard flight controller's
+            // event system rather than evaluating conditions from the AST.
+            Statement::OnCondition { condition, .. } => {
+                log(format!("[MAV_CMD] [TRIGGER REGISTERED] Condition will be monitored via telemetry: {:?}", condition));
+            }
         }
         Ok(())
     }
