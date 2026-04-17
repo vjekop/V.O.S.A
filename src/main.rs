@@ -32,6 +32,11 @@ enum Command {
         /// ROS 2 Domain ID. If provided, connects natively to the ROS 2 DDS network instead of simulating.
         #[arg(long, value_name = "DOMAIN_ID")]
         ros2: Option<u32>,
+        /// Inject fixed sensor values into the simulator, e.g. --inject battery=18,wind=15,roll_angle=0.5
+        /// Injected values stay constant (battery won't drain, wind won't escalate).
+        /// Use to test whether your trigger conditions fire under specific scenarios.
+        #[arg(long, value_name = "KEY=VAL,...")]
+        inject: Option<String>,
     },
     /// Validate a .vosa file without executing
     Check {
@@ -46,7 +51,7 @@ fn main() {
     let cli = Cli::parse();
 
     match cli.command {
-        Command::Run { file, ast, mavlink, ros2 } => cmd_run(file, ast, mavlink, ros2),
+        Command::Run { file, ast, mavlink, ros2, inject } => cmd_run(file, ast, mavlink, ros2, inject),
         Command::Check { file }   => cmd_check(file),
         Command::Docs             => cmd_docs(),
     }
@@ -62,7 +67,18 @@ fn read_file(path: &PathBuf) -> String {
     }
 }
 
-fn cmd_run(file: PathBuf, print_ast: bool, mavlink: Option<String>, ros2: Option<u32>) {
+fn parse_injection(s: &str) -> std::collections::HashMap<String, f64> {
+    s.split(',')
+        .filter_map(|pair| {
+            let mut parts = pair.splitn(2, '=');
+            let key = parts.next()?.trim().to_string();
+            let val: f64 = parts.next()?.trim().parse().ok()?;
+            Some((key, val))
+        })
+        .collect()
+}
+
+fn cmd_run(file: PathBuf, print_ast: bool, mavlink: Option<String>, ros2: Option<u32>, inject: Option<String>) {
     println!("{}", banner());
     let src = read_file(&file);
 
@@ -108,7 +124,14 @@ fn cmd_run(file: PathBuf, print_ast: bool, mavlink: Option<String>, ros2: Option
         let mut bridge = vosa::hw_bridge::MavlinkBridge::new(&conn);
         bridge.execute(&mission)
     } else {
-        let mut rt = vosa::runtime::Runtime::new();
+        let injected = inject.as_deref().map(parse_injection).unwrap_or_default();
+        if !injected.is_empty() {
+            println!("{}", "── Sensor Injection ──".yellow().bold());
+            for (k, v) in &injected {
+                println!("  {} = {}", k.bold(), v);
+            }
+        }
+        let mut rt = vosa::runtime::Runtime::with_injection(injected);
         rt.execute(&mission)
     };
 
@@ -260,12 +283,27 @@ vehicle, safety, and flight sub-blocks, plus a required sequence.
   // This is a line comment
 
 ─── CLI Usage ───────────────────────────────────────────────
-  vosa run   <file.vosa>          Simulate a mission
-  vosa run   <file.vosa> --ast    Show parsed AST + simulate
+  vosa run   <file.vosa>                      Simulate a mission
+  vosa run   <file.vosa> --ast                Show parsed AST + simulate
   vosa run   <file.vosa> --mavlink tcp:127.0.0.1:5760
   vosa run   <file.vosa> --ros2 0
-  vosa check <file.vosa>          Validate without running
-  vosa docs                       Show this reference
+  vosa run   <file.vosa> --inject battery=18,wind=15
+  vosa check <file.vosa>                      Validate without running
+  vosa docs                                   Show this reference
+
+─── Sensor Injection ────────────────────────────────────────
+  Override simulator sensor values to test trigger conditions
+  without hardware. Injected values remain constant — battery
+  won't drain, wind won't escalate.
+
+    --inject battery=18         Hold battery at 18%
+    --inject wind=15            Hold wind at 15 m/s
+    --inject obstacle=1         Force obstacle_detected = true
+    --inject battery=18,wind=15 Multiple overrides, comma-separated
+    --inject roll_angle=0.5     Any declared custom sensor
+
+  Use case: verify that your triggers fire at the right thresholds
+  before flying real hardware.
 
 ─── Sensor Bindings ─────────────────────────────────────────
   Declare a named sensor from any supported MAVLink field,
