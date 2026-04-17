@@ -89,10 +89,19 @@ fn cmd_run(file: PathBuf, print_ast: bool, mavlink: Option<String>, ros2: Option
 
     // Execute
     let result = if let Some(domain_id) = ros2 {
-        println!("{}", "── ROS 2 DOMAIN EXECUTION ──".magenta().bold());
-        match vosa::hw_bridge::Ros2Bridge::new(domain_id) {
-            Ok(mut bridge) => bridge.execute(&mission),
-            Err(e) => Err(e),
+        #[cfg(feature = "ros2")]
+        {
+            println!("{}", "── ROS 2 DOMAIN EXECUTION ──".magenta().bold());
+            match vosa::hw_bridge::Ros2Bridge::new(domain_id) {
+                Ok(mut bridge) => bridge.execute(&mission),
+                Err(e) => Err(e),
+            }
+        }
+        #[cfg(not(feature = "ros2"))]
+        {
+            let _ = domain_id;
+            eprintln!("ROS 2 support is not compiled in. Rebuild with: cargo build --features ros2");
+            std::process::exit(1);
         }
     } else if let Some(conn) = mavlink {
         println!("{}", "── MAVLink Execution ──".magenta().bold());

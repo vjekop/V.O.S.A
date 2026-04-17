@@ -4,7 +4,9 @@ use crate::runtime::ExecutionReport;
 use mavlink::common::{self, MavMessage};
 use mavlink::MavConnection;
 
+#[cfg(feature = "ros2")]
 pub mod ros2;
+#[cfg(feature = "ros2")]
 pub use ros2::Ros2Bridge;
 
 // ── Constants ─────────────────────────────────────────────────────────────────
@@ -14,6 +16,9 @@ const TARGET_COMPONENT: u8 = 1;
 
 /// Messages to scan while waiting for a specific response (~1 s at 100 Hz).
 const WAIT_ATTEMPTS: usize = 100;
+/// Extended wait for the initial vehicle heartbeat (up to ~60 s at 100 Hz).
+/// PX4 SITL can take 10-20 s before its MAVLink interface is ready.
+const HEARTBEAT_WAIT_ATTEMPTS: usize = 6000;
 /// Extended wait for GPS lock (up to ~30 s at 100 Hz).
 const GPS_WAIT_ATTEMPTS: usize = 3000;
 
@@ -123,9 +128,9 @@ impl MavlinkBridge {
             .send_default(&gcs_heartbeat())
             .map_err(|e| VosaError::RuntimeError(format!("Heartbeat send failed: {e}")))?;
 
-        println!("[MAVLink] Waiting for vehicle heartbeat ...");
+        println!("[MAVLink] Waiting for vehicle heartbeat (up to ~60 s) ...");
         let mut telemetry = TelemetryState::default();
-        recv_until(&vehicle, &mut telemetry, WAIT_ATTEMPTS, |msg| {
+        recv_until(&vehicle, &mut telemetry, HEARTBEAT_WAIT_ATTEMPTS, |msg| {
             matches!(msg, MavMessage::HEARTBEAT(_))
         })?;
         println!("[MAVLink] Vehicle link established");
