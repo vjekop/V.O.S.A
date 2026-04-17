@@ -9,6 +9,9 @@ Versions follow [Semantic Versioning](https://semver.org/).
 ## [Unreleased]
 
 ### Added
+- **Sensor Injection** (`--inject`): Override any sensor value in the simulator — battery, wind, obstacle, or any custom sensor — to test trigger conditions at specific thresholds without hardware. Injected values remain constant throughout the run.
+- **CI / Release automation**: GitHub Actions workflows for cross-platform testing (Ubuntu, macOS, Windows) on every PR, and automatic binary releases for all three platforms on version tags.
+- **CONTRIBUTING.md rewrite**: 60-second quickstart, good-first-issues table, project layout diagram, `--inject` testing guide, hardware testing instructions.
 - **ROS 2 Network Integration**: Added native ROS 2 publisher support using pure-Rust DDS (`ros2-client`). The compiler maps standard actions natively to `/vosa/waypoint` (`PoseStamped`) and `/vosa/command` (`String`).
 - **Parallel Control Flow**: Added `parallel { ... }` structural block parsing and execution logic, enabling commands like camera recording to run simultaneously alongside positional waypoints.
 - **MAVLink Hardware Bridge**: Created a MVP `MavlinkBridge` allowing AST translation directly into MAV_CMD packets rather than simulations.
