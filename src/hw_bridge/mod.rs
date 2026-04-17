@@ -235,6 +235,10 @@ impl MavlinkBridge {
 
         monitor_mission(&vehicle, &mut telemetry, &mut triggers, item_count, &mut steps)?;
 
+        // ── 9. Return to launch after waypoints complete ──────────────────────
+        println!("[MAVLink] Waypoints complete — sending RTL");
+        set_flight_mode(&vehicle, PX4_CUSTOM_MAIN_MODE_AUTO, PX4_CUSTOM_SUB_MODE_AUTO_RTL)?;
+
         println!("[MAVLink] Mission complete");
         Ok(ExecutionReport {
             mission_name: mission.name.clone(),
@@ -749,8 +753,16 @@ fn command_to_mav_item(cmd: &Command) -> Option<MavItem> {
             MavItem::Waypoint { lat: *lat, lon: *lon, alt: *alt as f32 }
         }
         Command::Hover { duration } => MavItem::LoiterTime { duration: *duration as f32 },
-        Command::Land => MavItem::Land,
-        Command::ReturnHome => MavItem::ReturnHome,
+        // Land and ReturnHome are sent as COMMAND_LONG after mission upload,
+        // not as mission items — PX4 gz_x500 SITL rejects them as NAV items.
+        Command::Land => {
+            println!("[MAVLink] Skipping land() as mission item — will send as COMMAND_LONG");
+            return None;
+        }
+        Command::ReturnHome => {
+            println!("[MAVLink] Skipping return_home() as mission item — will send as COMMAND_LONG");
+            return None;
+        }
         // Camera commands are skipped in MAVLink mode — PX4 SITL rejects
         // IMAGE/VIDEO_CAPTURE on vehicles without a camera payload.
         // On real hardware with a camera-equipped vehicle, remove this guard.
