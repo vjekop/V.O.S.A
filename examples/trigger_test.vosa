@@ -1,0 +1,53 @@
+// trigger_test.vosa
+//
+// Proves reactive triggers work on real hardware.
+//
+// The battery trigger threshold is set to 65% — just below the sim
+// starting charge (~68%) so it fires within the first waypoint.
+// When it fires, VOSA switches PX4 to AUTO.RTL autonomously with
+// no human input. You should see the drone abort the mission and
+// fly itself home mid-flight.
+//
+// Run with:
+//   ./target/release/vosa run examples/trigger_test.vosa --mavlink udpin:0.0.0.0:14550
+
+mission "trigger_test" {
+
+  vehicle: Quadcopter
+
+  safety {
+    max_altitude: 120m
+    min_altitude: 5m
+    max_speed: 15m/s
+    battery_reserve: 10%
+    failsafe: return_home
+    geofence: circle(center: home, radius: 2000m)
+  }
+
+  flight {
+    cruise_altitude: 30m
+    cruise_speed: 5m/s
+  }
+
+  sequence {
+
+    // ── Reactive trigger under test ──────────────────────────────────────
+    // Threshold set to 65% — fires within the first leg of the mission.
+    // Watch the drone abort autonomously and RTL without any human input.
+    on battery < 65% {
+      return_home()
+      land()
+    }
+
+    // ── Flight plan (same Zurich grid as sim_mission) ────────────────────
+    takeoff(30m)
+
+    waypoint(lat: 47.3984, lon: 8.5462, alt: 30m)
+    waypoint(lat: 47.3989, lon: 8.5462, alt: 30m)
+    waypoint(lat: 47.3989, lon: 8.5468, alt: 30m)
+    waypoint(lat: 47.3984, lon: 8.5468, alt: 30m)
+    waypoint(lat: 47.3980, lon: 8.5462, alt: 30m)
+
+    return_home()
+  }
+}

@@ -344,6 +344,7 @@ fn monitor_mission<C: MavConnection<MavMessage>>(
     // Send a GCS heartbeat every 1 s based on wall-clock time, not message count.
     // PX4 triggers a GCS-lost failsafe if it doesn't receive a heartbeat for >3 s.
     let mut last_heartbeat = std::time::Instant::now();
+    let mut last_reached_seq: Option<u16> = None;
     loop {
         // Always heartbeat on time regardless of incoming message rate
         if last_heartbeat.elapsed() >= std::time::Duration::from_secs(1) {
@@ -355,19 +356,22 @@ fn monitor_mission<C: MavConnection<MavMessage>>(
             Ok((_, msg)) => {
                 telemetry.update(&msg);
 
-                // Log waypoint progress
+                // Log waypoint progress — deduplicate repeated MISSION_ITEM_REACHED
                 if let MavMessage::MISSION_ITEM_REACHED(data) = &msg {
-                    let desc = format!(
-                        "[REACHED] Mission item {}/{}",
-                        data.seq + 1,
-                        item_count
-                    );
-                    println!("[MAVLink] {desc}  batt={:.1}%  wind={:.1}m/s",
-                        telemetry.battery_percent, telemetry.wind_speed_ms);
-                    steps.push(crate::runtime::ExecutionStep {
-                        index: steps.len(),
-                        description: desc,
-                    });
+                    if last_reached_seq != Some(data.seq) {
+                        last_reached_seq = Some(data.seq);
+                        let desc = format!(
+                            "[REACHED] Mission item {}/{}",
+                            data.seq + 1,
+                            item_count
+                        );
+                        println!("[MAVLink] {desc}  batt={:.1}%  wind={:.1}m/s",
+                            telemetry.battery_percent, telemetry.wind_speed_ms);
+                        steps.push(crate::runtime::ExecutionStep {
+                            index: steps.len(),
+                            description: desc,
+                        });
+                    }
 
                     // Check if this was the last item
                     if data.seq as usize >= item_count.saturating_sub(1) {
