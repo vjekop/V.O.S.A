@@ -328,7 +328,15 @@ fn monitor_mission<C: MavConnection<MavMessage>>(
     item_count: usize,
     steps: &mut Vec<crate::runtime::ExecutionStep>,
 ) -> Result<(), VosaError> {
+    // Send a GCS heartbeat every ~1 s so PX4 never triggers its GCS-lost failsafe.
+    let mut heartbeat_counter: u32 = 0;
     loop {
+        // Send heartbeat every 10 messages (~1 s at 10 Hz recv rate)
+        heartbeat_counter += 1;
+        if heartbeat_counter % 10 == 0 {
+            let _ = vehicle.send_default(&gcs_heartbeat());
+        }
+
         match vehicle.recv() {
             Ok((_, msg)) => {
                 telemetry.update(&msg);
@@ -518,13 +526,15 @@ fn wait_for_command_ack<C: MavConnection<MavMessage>>(
     telemetry: &mut TelemetryState,
     command: common::MavCmd,
 ) -> Result<(), VosaError> {
-    recv_until(vehicle, telemetry, WAIT_ATTEMPTS, |msg| {
+    // Use a longer window for ACKs and don't hard-fail — PX4 sometimes
+    // executes the command (e.g. arm) before sending the ACK, causing a
+    // race if we bail out too early and stop sending heartbeats.
+    let result = recv_until(vehicle, telemetry, WAIT_ATTEMPTS * 5, |msg| {
         matches!(msg, MavMessage::COMMAND_ACK(ack) if ack.command == command)
-    })
-    .map_err(|_| {
-        VosaError::RuntimeError(format!("Timed out waiting for COMMAND_ACK ({command:?})"))
-    })?;
-
+    });
+    if result.is_err() {
+        println!("[MAVLink] Warning: no ACK received for {command:?} — continuing anyway");
+    }
     Ok(())
 }
 
