@@ -85,7 +85,7 @@ fn cmd_run(file: PathBuf, print_ast: bool, mavlink: Option<String>, ros2: Option
         eprintln!("{} {e}", "safety violation:".yellow().bold());
         std::process::exit(2);
     }
-    println!("{} All safety constraints passed.", "✔".green().bold());
+    println!("{}", "All safety constraints passed.".green().bold());
 
     // Execute
     let result = if let Some(domain_id) = ros2 {
@@ -137,7 +137,7 @@ fn cmd_check(file: PathBuf) {
         Ok(mission) => {
             let sandbox = vosa::safety::SafetySandbox::new();
             match sandbox.validate(&mission) {
-                Ok(()) => println!("{} \"{}\" is valid.", "✔".green().bold(), mission.name),
+                Ok(()) => println!("{}", format!("\"{}\" is valid.", mission.name).green().bold()),
                 Err(e) => {
                     eprintln!("{} {e}", "safety violation:".yellow().bold());
                     std::process::exit(2);

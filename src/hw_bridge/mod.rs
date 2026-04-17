@@ -410,7 +410,7 @@ fn fire_triggers<C: MavConnection<MavMessage>>(
         if condition_met && !trigger.fired {
             trigger.fired = true;
             let label = trigger_label(&trigger.condition);
-            println!("[MAVLink] ⚡ TRIGGER FIRED: on {label}  batt={:.1}%  wind={:.1}m/s",
+            println!("[MAVLink] TRIGGER FIRED: on {label}  batt={:.1}%  wind={:.1}m/s",
                 telemetry.battery_percent, telemetry.wind_speed_ms);
             steps.push(crate::runtime::ExecutionStep {
                 index: steps.len(),
