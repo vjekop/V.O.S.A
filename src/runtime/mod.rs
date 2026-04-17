@@ -161,7 +161,7 @@ impl Runtime {
             let src = if self.injected.contains_key(&binding.name) {
                 format!("injected: {value}")
             } else {
-                format!("simulation: 0.0")
+                "simulation: 0.0".to_string()
             };
             self.log(format!(
                 "[SENSOR] Registered: {} → {}.{} ({})",
@@ -170,7 +170,7 @@ impl Runtime {
         }
 
         for stmt in &mission.sequence.statements.clone() {
-            self.execute_statement(&stmt, mission.safety.as_ref())?;
+            self.execute_statement(stmt, mission.safety.as_ref())?;
         }
 
         self.log("[MISSION] Complete.");
@@ -199,7 +199,7 @@ impl Runtime {
                 for i in 0..*count {
                     self.log(format!("[REPEAT] Iteration {}/{}", i + 1, count));
                     for inner_stmt in &body.statements.clone() {
-                        self.execute_statement(&inner_stmt, safety)?;
+                        self.execute_statement(inner_stmt, safety)?;
                     }
                 }
             }
@@ -224,14 +224,14 @@ impl Runtime {
                 ));
                 if condition_met {
                     for inner_stmt in &body.statements.clone() {
-                        self.execute_statement(&inner_stmt, safety)?;
+                        self.execute_statement(inner_stmt, safety)?;
                     }
                 }
             }
             Statement::Parallel { body } => {
                 self.log("[PARALLEL] Dispatching concurrent block");
                 for inner_stmt in &body.statements.clone() {
-                    self.execute_statement(&inner_stmt, safety)?;
+                    self.execute_statement(inner_stmt, safety)?;
                 }
             }
             Statement::OnCondition {

@@ -133,7 +133,7 @@ impl Lexer {
             }
             '"' => self.lex_string()?,
             c if c.is_ascii_digit()
-                || (c == '-' && self.peek2().map_or(false, |d| d.is_ascii_digit())) =>
+                || (c == '-' && self.peek2().is_some_and(|d| d.is_ascii_digit())) =>
             {
                 self.lex_number()?
             }

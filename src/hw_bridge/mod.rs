@@ -238,10 +238,7 @@ impl MavlinkBridge {
 
         // ── 2. Wait for 3D GPS lock ───────────────────────────────────────────
         println!("[MAVLink] Waiting for 3D GPS lock ...");
-        recv_until(&vehicle, &mut telemetry, GPS_WAIT_ATTEMPTS, |_| {
-            false // keep going; GPS state updated via telemetry.update() inside recv_until
-        })
-        .or_else(|_| Ok::<_, VosaError>(()))?; // timeout is OK here; check below
+        let _ = recv_until(&vehicle, &mut telemetry, GPS_WAIT_ATTEMPTS, |_| false); // timeout OK; check below
 
         // Poll with logging until fix
         for attempt in 0..GPS_WAIT_ATTEMPTS {
@@ -315,9 +312,8 @@ impl MavlinkBridge {
         println!("[MAVLink] Waiting for EKF2 / preflight checks (up to 30 s) ...");
         for i in 0..300 {
             let _ = vehicle.send_default(&gcs_heartbeat());
-            match vehicle.recv() {
-                Ok((_, msg)) => telemetry.update(&msg),
-                Err(_) => {}
+            if let Ok((_, msg)) = vehicle.recv() {
+                telemetry.update(&msg);
             }
             if i % 50 == 49 {
                 println!("[MAVLink]   ... still waiting for EKF2");
@@ -430,7 +426,7 @@ where
 fn monitor_mission<C: MavConnection<MavMessage>>(
     vehicle: &C,
     telemetry: &mut TelemetryState,
-    triggers: &mut Vec<ActiveTrigger>,
+    triggers: &mut [ActiveTrigger],
     item_count: usize,
     steps: &mut Vec<crate::runtime::ExecutionStep>,
     safety: Option<&SafetyBlock>,
@@ -539,7 +535,7 @@ fn monitor_mission<C: MavConnection<MavMessage>>(
 fn fire_triggers<C: MavConnection<MavMessage>>(
     vehicle: &C,
     telemetry: &TelemetryState,
-    triggers: &mut Vec<ActiveTrigger>,
+    triggers: &mut [ActiveTrigger],
     steps: &mut Vec<crate::runtime::ExecutionStep>,
 ) -> Result<bool, VosaError> {
     let now = std::time::Instant::now();
@@ -959,6 +955,7 @@ fn trigger_label(condition: &TriggerCondition) -> String {
 // ── Mission item representation ───────────────────────────────────────────────
 
 #[derive(Debug)]
+#[allow(dead_code)]
 enum MavItem {
     Takeoff { altitude: f32 },
     Waypoint { lat: f64, lon: f64, alt: f32 },
