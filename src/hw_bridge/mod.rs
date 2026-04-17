@@ -59,7 +59,14 @@ impl TelemetryState {
             MavMessage::GPS_RAW_INT(d) => {
                 self.gps_fix_type = d.fix_type as u8;
             }
-            MavMessage::HOME_POSITION(_) => {
+            MavMessage::HOME_POSITION(d) => {
+                if !self.home_set {
+                    // lat/lon are in degE7 (degrees × 1e7)
+                    println!("[MAVLink] Home GPS: lat={:.7}, lon={:.7}, alt={:.1}m",
+                        d.latitude as f64 / 1e7,
+                        d.longitude as f64 / 1e7,
+                        d.altitude as f64 / 1000.0);
+                }
                 self.home_set = true;
             }
             MavMessage::WIND_COV(d) => {
@@ -544,6 +551,17 @@ fn upload_mission<C: MavConnection<MavMessage>>(
     telemetry: &mut TelemetryState,
     items: &[MavItem],
 ) -> Result<(), VosaError> {
+    // Clear any previously stored mission so PX4 doesn't execute stale waypoints
+    println!("[MAVLink] Clearing previous mission ...");
+    vehicle
+        .send_default(&MavMessage::MISSION_CLEAR_ALL(common::MISSION_CLEAR_ALL_DATA {
+            target_system: TARGET_SYSTEM,
+            target_component: TARGET_COMPONENT,
+        }))
+        .map_err(|e| VosaError::RuntimeError(format!("MISSION_CLEAR_ALL failed: {e}")))?;
+    // Give PX4 a moment to process the clear
+    std::thread::sleep(std::time::Duration::from_millis(500));
+
     vehicle
         .send_default(&MavMessage::MISSION_COUNT(common::MISSION_COUNT_DATA {
             count: items.len() as u16,
