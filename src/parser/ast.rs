@@ -15,6 +15,29 @@ pub struct Mission {
     pub flight: Option<FlightConfig>,
     /// The ordered list of commands to execute
     pub sequence: Sequence,
+    /// User-declared sensor bindings — map a name to a MAVLink message field
+    pub sensors: Vec<SensorBinding>,
+}
+
+// ── Sensor binding ────────────────────────────────────────────────────────────
+
+/// Maps a user-chosen name to a specific MAVLink telemetry field.
+///
+/// Syntax: `sensor <name> from <MESSAGE>.<field>`
+///
+/// Example:
+/// ```vosa
+/// sensor roll_angle from ATTITUDE.roll
+/// sensor gps_hdop   from GPS_RAW_INT.eph
+/// ```
+#[derive(Debug, Clone)]
+pub struct SensorBinding {
+    /// The name used to reference this sensor in trigger conditions
+    pub name: String,
+    /// The MAVLink message type (e.g. `ATTITUDE`, `VFR_HUD`)
+    pub message: String,
+    /// The field within that message (e.g. `roll`, `groundspeed`)
+    pub field: String,
 }
 
 // ── Vehicle ──────────────────────────────────────────────────────────────────
@@ -140,6 +163,13 @@ pub enum TriggerCondition {
     And(Box<TriggerCondition>, Box<TriggerCondition>),
     /// Either condition must be true
     Or(Box<TriggerCondition>, Box<TriggerCondition>),
+    /// Fires when a user-declared sensor crosses a threshold.
+    /// The sensor must be declared via `sensor <name> from MESSAGE.field`.
+    Custom {
+        name: String,
+        operator: Operator,
+        threshold: f64,
+    },
 }
 
 #[derive(Debug, Clone)]

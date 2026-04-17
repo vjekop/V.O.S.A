@@ -1,5 +1,6 @@
 use crate::error::VosaError;
 use crate::parser::ast::*;
+use std::collections::HashMap;
 
 /// The result of executing a VOSA mission in the simulator.
 #[derive(Debug)]
@@ -70,6 +71,8 @@ pub struct Runtime {
     waypoints_visited: u32,
     /// Whether an obstacle has been detected (always false in simulation)
     obstacle_detected: bool,
+    /// Current values of user-declared custom sensors (always 0.0 in simulation)
+    sensor_values: HashMap<String, f64>,
     /// All registered `on` triggers accumulated during sequence execution
     triggers: Vec<ActiveTrigger>,
 }
@@ -87,6 +90,7 @@ impl Runtime {
             wind_speed_ms: 3.0,
             waypoints_visited: 0,
             obstacle_detected: false,
+            sensor_values: HashMap::new(),
             triggers: Vec::new(),
         }
     }
@@ -125,6 +129,15 @@ impl Runtime {
         }
 
         self.log(format!("[ENV] Initial wind: {:.1}m/s", self.wind_speed_ms));
+
+        // Register declared sensors (all start at 0.0 in simulation)
+        for binding in &mission.sensors {
+            self.sensor_values.insert(binding.name.clone(), 0.0);
+            self.log(format!(
+                "[SENSOR] Registered: {} → {}.{} (simulation: 0.0)",
+                binding.name, binding.message, binding.field
+            ));
+        }
 
         for stmt in &mission.sequence.statements.clone() {
             self.execute_statement(&stmt, mission.safety.as_ref())?;
@@ -204,16 +217,16 @@ impl Runtime {
         let battery = self.battery_percent;
         let wind = self.wind_speed_ms;
         let obstacle = self.obstacle_detected;
+        let sensors = self.sensor_values.clone();
 
         let mut to_fire: Vec<usize> = Vec::new();
 
         for (i, trigger) in self.triggers.iter_mut().enumerate() {
-            let condition_met = eval_condition(&trigger.condition, battery, wind, obstacle);
+            let condition_met = eval_condition(&trigger.condition, battery, wind, obstacle, &sensors);
             if condition_met && !trigger.fired {
                 trigger.fired = true;
                 to_fire.push(i);
             } else if !condition_met {
-                // Reset so the trigger can re-fire if the condition recurs
                 trigger.fired = false;
             }
         }
@@ -279,6 +292,7 @@ impl Runtime {
                 self.current_lat = *lat;
                 self.current_lon = *lon;
                 self.current_alt = *alt;
+                self.check_battery_failsafe(safety)?;
                 self.max_alt = self.max_alt.max(*alt);
                 self.waypoints_visited += 1;
                 self.simulate_wind();
@@ -296,6 +310,7 @@ impl Runtime {
                 self.log(format!("[RTH] Returning to home  [{dist:.0}m]"));
                 self.current_lat = 0.0;
                 self.current_lon = 0.0;
+                self.check_battery_failsafe(safety)?;
             }
 
             Command::Camera { action, resolution } => {
@@ -307,11 +322,52 @@ impl Runtime {
     }
 
     fn drain_battery(&mut self, distance_m: f64) {
-        // 1% drain per 500m
         self.battery_percent -= distance_m / 500.0;
         if self.battery_percent < 0.0 {
             self.battery_percent = 0.0;
         }
+    }
+
+    /// Check whether battery has dropped below the declared reserve and, if so,
+    /// execute the failsafe action and abort the mission.
+    fn check_battery_failsafe(&mut self, safety: Option<&SafetyBlock>) -> Result<(), VosaError> {
+        let safety = match safety { Some(s) => s, None => return Ok(()) };
+        let reserve = match safety.battery_reserve { Some(r) => r, None => return Ok(()) };
+
+        if self.battery_percent <= reserve {
+            let action = safety.failsafe.as_ref().cloned().unwrap_or(FailsafeAction::ReturnHome);
+            self.log(format!(
+                "[FAILSAFE] Battery {:.1}% \u{2264} reserve {reserve}% — executing failsafe: {action:?}",
+                self.battery_percent
+            ));
+            match &action {
+                FailsafeAction::ReturnHome => {
+                    let dist = haversine(self.current_lat, self.current_lon, 0.0, 0.0);
+                    self.battery_percent -= dist / 500.0;
+                    if self.battery_percent < 0.0 { self.battery_percent = 0.0; }
+                    self.total_distance += dist;
+                    self.log(format!("[FAILSAFE] RTH — {dist:.0}m to home"));
+                    self.current_lat = 0.0;
+                    self.current_lon = 0.0;
+                    self.current_alt = 0.0;
+                }
+                FailsafeAction::Land => {
+                    self.log(format!(
+                        "[FAILSAFE] Landing at ({:.4}°, {:.4}°)",
+                        self.current_lat, self.current_lon
+                    ));
+                    self.current_alt = 0.0;
+                }
+                FailsafeAction::Hover => {
+                    self.log("[FAILSAFE] Hovering — awaiting manual intervention");
+                }
+            }
+            return Err(VosaError::FailsafeTriggered(format!(
+                "battery dropped to {:.1}%, below reserve of {reserve}%",
+                self.battery_percent
+            )));
+        }
+        Ok(())
     }
 
     /// Simulate wind increasing with flight time (1 m/s per 3 waypoints).
@@ -332,6 +388,7 @@ fn eval_condition(
     battery: f64,
     wind: f64,
     obstacle: bool,
+    sensors: &HashMap<String, f64>,
 ) -> bool {
     match condition {
         TriggerCondition::Battery { operator, threshold_percent } => match operator {
@@ -343,11 +400,20 @@ fn eval_condition(
             Operator::GreaterThan => wind > *threshold_ms,
         },
         TriggerCondition::ObstacleDetected => obstacle,
+        TriggerCondition::Custom { name, operator, threshold } => {
+            let value = sensors.get(name).copied().unwrap_or(0.0);
+            match operator {
+                Operator::LessThan    => value < *threshold,
+                Operator::GreaterThan => value > *threshold,
+            }
+        }
         TriggerCondition::And(a, b) => {
-            eval_condition(a, battery, wind, obstacle) && eval_condition(b, battery, wind, obstacle)
+            eval_condition(a, battery, wind, obstacle, sensors)
+                && eval_condition(b, battery, wind, obstacle, sensors)
         }
         TriggerCondition::Or(a, b) => {
-            eval_condition(a, battery, wind, obstacle) || eval_condition(b, battery, wind, obstacle)
+            eval_condition(a, battery, wind, obstacle, sensors)
+                || eval_condition(b, battery, wind, obstacle, sensors)
         }
     }
 }
@@ -364,6 +430,10 @@ fn condition_label(condition: &TriggerCondition) -> String {
             format!("wind {op} {threshold_ms}m/s")
         }
         TriggerCondition::ObstacleDetected => "obstacle_detected".to_string(),
+        TriggerCondition::Custom { name, operator, threshold } => {
+            let op = if *operator == Operator::LessThan { "<" } else { ">" };
+            format!("{name} {op} {threshold}")
+        }
         TriggerCondition::And(a, b) => format!("{} and {}", condition_label(a), condition_label(b)),
         TriggerCondition::Or(a, b)  => format!("{} or {}",  condition_label(a), condition_label(b)),
     }
@@ -395,6 +465,7 @@ mod tests {
             safety,
             flight: None,
             sequence: Sequence { statements },
+            sensors: vec![],
         }
     }
 

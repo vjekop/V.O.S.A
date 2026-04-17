@@ -1,5 +1,6 @@
 use crate::error::VosaError;
 use crate::parser::ast::*;
+use std::collections::HashSet;
 
 /// The safety sandbox validates a parsed mission against its own declared safety
 /// constraints **before any execution begins** — i.e. before the motors spin.
@@ -55,6 +56,9 @@ impl SafetySandbox {
 
         // ── Conflicting triggers ──────────────────────────────────────────────
         self.check_trigger_conflicts(mission)?;
+
+        // ── Sensor binding validation ─────────────────────────────────────────
+        self.check_sensor_references(mission)?;
 
         Ok(())
     }
@@ -276,6 +280,91 @@ impl SafetySandbox {
         }
         Ok(())
     }
+
+    // ── Sensor binding validation ─────────────────────────────────────────────
+
+    fn check_sensor_references(&self, mission: &Mission) -> Result<(), VosaError> {
+        // Validate each binding points to a supported MAVLink field
+        for binding in &mission.sensors {
+            if !is_known_sensor(&binding.message, &binding.field) {
+                return Err(VosaError::SafetyViolation(format!(
+                    "sensor '{}': '{}.{}' is not a supported MAVLink field — \
+                     check the VOSA sensor reference for supported sources",
+                    binding.name, binding.message, binding.field
+                )));
+            }
+        }
+
+        // Validate all Custom trigger conditions reference a declared sensor
+        let declared: HashSet<&str> = mission.sensors.iter().map(|s| s.name.as_str()).collect();
+        for stmt in &mission.sequence.statements {
+            self.check_sensor_refs_stmt(stmt, &declared)?;
+        }
+        Ok(())
+    }
+
+    fn check_sensor_refs_stmt(
+        &self,
+        stmt: &Statement,
+        declared: &HashSet<&str>,
+    ) -> Result<(), VosaError> {
+        match stmt {
+            Statement::OnCondition { condition, body } => {
+                self.check_sensor_refs_condition(condition, declared)?;
+                for inner in &body.statements {
+                    self.check_sensor_refs_stmt(inner, declared)?;
+                }
+            }
+            Statement::Repeat { body, .. }
+            | Statement::IfBattery { body, .. }
+            | Statement::Parallel { body } => {
+                for inner in &body.statements {
+                    self.check_sensor_refs_stmt(inner, declared)?;
+                }
+            }
+            Statement::Command(_) => {}
+        }
+        Ok(())
+    }
+
+    fn check_sensor_refs_condition(
+        &self,
+        condition: &TriggerCondition,
+        declared: &HashSet<&str>,
+    ) -> Result<(), VosaError> {
+        match condition {
+            TriggerCondition::Custom { name, .. } => {
+                if !declared.contains(name.as_str()) {
+                    return Err(VosaError::SafetyViolation(format!(
+                        "trigger references undeclared sensor '{name}' — \
+                         add 'sensor {name} from MESSAGE.field' to the mission body"
+                    )));
+                }
+            }
+            TriggerCondition::And(a, b) | TriggerCondition::Or(a, b) => {
+                self.check_sensor_refs_condition(a, declared)?;
+                self.check_sensor_refs_condition(b, declared)?;
+            }
+            _ => {}
+        }
+        Ok(())
+    }
+}
+
+/// Returns true if `MESSAGE.field` is a supported MAVLink sensor source.
+fn is_known_sensor(message: &str, field: &str) -> bool {
+    matches!(
+        (message, field),
+        ("ATTITUDE", "roll")      | ("ATTITUDE", "pitch")     | ("ATTITUDE", "yaw")
+        | ("ATTITUDE", "rollspeed") | ("ATTITUDE", "pitchspeed") | ("ATTITUDE", "yawspeed")
+        | ("VFR_HUD", "airspeed")   | ("VFR_HUD", "groundspeed") | ("VFR_HUD", "alt")
+        | ("VFR_HUD", "climb")
+        | ("WIND_COV", "wind_x")    | ("WIND_COV", "wind_y")
+        | ("GPS_RAW_INT", "eph")    | ("GPS_RAW_INT", "epv")
+        | ("GPS_RAW_INT", "satellites_visible")
+        | ("SYS_STATUS", "battery_remaining")
+        | ("DISTANCE_SENSOR", "current_distance")
+    )
 }
 
 impl Default for SafetySandbox {
@@ -368,8 +457,9 @@ fn conditions_can_overlap(a: &TriggerCondition, b: &TriggerCondition) -> bool {
                 _ => false, // < and > on battery can only overlap at the exact threshold
             }
         }
-        // obstacle_detected can coincide with any battery or wind condition
+        // obstacle_detected and custom sensors can coincide with anything
         (TriggerCondition::ObstacleDetected, _) | (_, TriggerCondition::ObstacleDetected) => true,
+        (TriggerCondition::Custom { .. }, _) | (_, TriggerCondition::Custom { .. }) => true,
         // Two wind thresholds — same logic as battery
         (
             TriggerCondition::Wind { operator: op_a, .. },
@@ -397,6 +487,10 @@ fn condition_display(c: &TriggerCondition) -> String {
             format!("wind {op} {threshold_ms}m/s")
         }
         TriggerCondition::ObstacleDetected => "obstacle_detected".into(),
+        TriggerCondition::Custom { name, operator, threshold } => {
+            let op = if *operator == Operator::LessThan { "<" } else { ">" };
+            format!("{name} {op} {threshold}")
+        }
         TriggerCondition::And(a, b) => format!("{} and {}", condition_display(a), condition_display(b)),
         TriggerCondition::Or(a, b)  => format!("{} or {}",  condition_display(a), condition_display(b)),
     }
@@ -416,6 +510,7 @@ mod tests {
             safety: Some(safety),
             flight: None,
             sequence: Sequence { statements },
+            sensors: vec![],
         }
     }
 
@@ -430,6 +525,7 @@ mod tests {
             safety: Some(safety),
             flight: Some(flight),
             sequence: Sequence { statements },
+            sensors: vec![],
         }
     }
 
@@ -497,6 +593,7 @@ mod tests {
             sequence: Sequence {
                 statements: vec![Statement::Command(Command::Takeoff { altitude: 9999.0 })],
             },
+            sensors: vec![],
         };
         assert!(SafetySandbox::new().validate(&m).is_ok());
     }

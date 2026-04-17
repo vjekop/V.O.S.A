@@ -1,30 +1,35 @@
-# V.O.S.A. — Vectorized Operational Safety Autonomy
+# VOSA — Drone Mission Safety, Before You Leave the Ground
 
-> **The open-source DSL for autonomous drone missions.**  
-> Write a mission. V.O.S.A. validates it, reacts to conditions mid-flight, and drives real hardware — PX4, MAVLink, ROS 2, Gazebo.
+> **Write a mission. Catch every unsafe flight before motors spin.**  
+> VOSA is an open-source mission language for autonomous drones — with reactive safety built in, not bolted on.
 
 [![License: Apache 2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)
 [![Built with Rust](https://img.shields.io/badge/Built%20with-Rust-orange.svg)](https://www.rust-lang.org)
 
 ---
 
-## What Is V.O.S.A.?
+## The Problem
 
-Drone autonomy today is fragile. Missions are rigid scripts — they execute line by line and have no idea what's happening around them. If battery drops, wind picks up, or an obstacle appears, there's no language-level response. You get a crash, a fly-away, or a manually aborted flight.
+Drone crashes are expensive. Fly-aways are embarrassing. Manually aborted flights cost time and money.
 
-V.O.S.A. is built around a different idea: **missions should react, not just execute.**
+Most drone missions are rigid scripts — they execute line by line and have no awareness of what's happening around them. Battery drops? Wind picks up? Obstacle appears? The vehicle has no language-level response. You find out when something goes wrong.
 
-It is a typed, safety-first DSL where:
-- Safety constraints are **enforced at compile time** — before the motors spin
-- Missions respond **autonomously to live conditions** via reactive triggers
-- The language compiles directly to **real MAVLink packets** — no middleware, no abstraction tax
-- It connects natively to **PX4 SITL, Gazebo, and ROS 2 / MAVROS**
+**VOSA is built around a different idea: missions should react, not just execute.**
 
 ---
 
-## Reactive Triggers
+## What VOSA Does
 
-The core feature. Drones respond to conditions mid-flight without human input:
+VOSA is a typed mission language that compiles directly to real drone hardware (PX4, ArduPilot via MAVLink). You describe your mission — including what should happen when conditions change mid-flight — and VOSA enforces your safety rules at compile time, before anything moves.
+
+- **Pre-flight safety validation** — altitude, speed, geofence, battery reserves checked before arming
+- **Reactive triggers** — missions respond autonomously to live telemetry: battery, wind, obstacles
+- **Real hardware output** — compiles to MAVLink packets, no middleware, no abstraction tax
+- **Simulator-ready** — connects natively to PX4 SITL, Gazebo, and ROS 2 / MAVROS
+
+---
+
+## What a Mission Looks Like
 
 ```vosa
 mission "autonomous_survey" {
@@ -39,16 +44,18 @@ mission "autonomous_survey" {
 
   sequence {
 
-    // Register reactive triggers — active for the entire mission
+    // If battery drops below 20%, abort and come home — automatically
     on battery < 20% {
       return_home()
       land()
     }
 
+    // Wait out high wind, then continue
     on wind > 12m/s {
       hover(30s)
     }
 
+    // Obstacle detected: pause, then return safely
     on obstacle_detected {
       hover(5s)
       return_home()
@@ -66,102 +73,73 @@ mission "autonomous_survey" {
 }
 ```
 
-Triggers use **rising-edge semantics** — they fire once when a condition becomes true, reset when it clears, and can re-fire if the situation recurs. On real hardware they are driven by live MAVLink telemetry (`SYS_STATUS`, `WIND_COV`), not simulation.
+Triggers fire once when a condition becomes true, reset when it clears, and re-fire if conditions recur. On real hardware they are driven by live MAVLink telemetry (`SYS_STATUS`, `WIND_COV`) — not simulation.
 
 ---
 
 ## Quick Start
 
-### Prerequisites
-- [Rust toolchain](https://rustup.rs/) (1.75+)
+**Prerequisites:** [Rust 1.75+](https://rustup.rs/)
 
-### Install
 ```bash
 git clone https://github.com/vjekop/V.O.S.A.git
 cd V.O.S.A
 cargo build --release
 ```
 
-### Simulate a mission
+**Validate a mission (no hardware needed):**
+```bash
+./target/release/vosa check examples/reactive_mission.vosa
+```
+
+**Run in simulation:**
 ```bash
 ./target/release/vosa run examples/reactive_mission.vosa
 ./target/release/vosa run examples/perimeter_scan.vosa
 ```
 
-### Validate without executing
-```bash
-./target/release/vosa check examples/reactive_mission.vosa
-```
-
-### Language reference
+**Browse the language reference:**
 ```bash
 ./target/release/vosa docs
 ```
 
 ---
 
-## Gazebo + PX4 SITL
+## Connecting to Real Hardware
 
-V.O.S.A. connects directly to PX4 SITL running inside Gazebo. No middleware required.
-
-### Setup (Ubuntu / WSL2)
+### PX4 SITL + Gazebo
 
 ```bash
-# 1. Clone PX4 and install dependencies
+# 1. Start PX4 SITL (Ubuntu / WSL2)
 git clone https://github.com/PX4/PX4-Autopilot.git --recursive
-cd PX4-Autopilot
-bash ./Tools/setup/ubuntu.sh
-
-# 2. Start PX4 SITL with Gazebo
+cd PX4-Autopilot && bash ./Tools/setup/ubuntu.sh
 make px4_sitl gazebo
-```
 
-### Run a VOSA mission against it
-
-```bash
-# In a second terminal
+# 2. Run your VOSA mission against it
 ./target/release/vosa run examples/reactive_mission.vosa --mavlink udpin:0.0.0.0:14550
 ```
 
-### What happens
+VOSA handles the full startup sequence: GCS heartbeat → GPS lock → home position → `AUTO.MISSION` mode → mission upload → arm → live telemetry monitoring.
 
-V.O.S.A. handles the full startup sequence automatically:
-
-1. GCS heartbeat handshake
-2. Waits for 3D GPS lock
-3. Waits for home position confirmation
-4. Switches PX4 to `AUTO.MISSION` mode
-5. Uploads mission via `MISSION_ITEM_INT` protocol
-6. Arms vehicle, starts mission
-7. Monitors live telemetry — fires reactive triggers in real time
-
----
-
-## ROS 2 / MAVROS
+### ROS 2 / MAVROS
 
 ```bash
-# Start MAVROS
 ros2 run mavros mavros_node --ros-args -p fcu_url:=udp://:14540@127.0.0.1:14557
-
-# Arm and set OFFBOARD mode first (service calls)
 ros2 service call /mavros/cmd/arming mavros_msgs/srv/CommandBool "{value: true}"
 ros2 service call /mavros/set_mode mavros_msgs/srv/SetMode "{custom_mode: 'OFFBOARD'}"
-
-# Run mission
 ./target/release/vosa run examples/reactive_mission.vosa --ros2 0
 ```
-
-Waypoints are published to `/mavros/setpoint_raw/global` as `mavros_msgs/GlobalPositionTarget`.
 
 ---
 
 ## Language Reference
 
-### Full structure
-
 ```vosa
 mission "name" {
     vehicle: Quadcopter | FixedWing | Hexacopter
+
+    // Declare named sensors from any supported MAVLink field
+    sensor <name> from <MESSAGE>.<field>
 
     safety {
         max_altitude:    <n>m
@@ -178,7 +156,6 @@ mission "name" {
     }
 
     sequence {
-        // Commands
         takeoff(<n>m)
         waypoint(lat: <f64>, lon: <f64>, alt: <n>m)
         hover(<n>s)
@@ -186,22 +163,22 @@ mission "name" {
         return_home()
         land()
 
-        // Control flow
         repeat <n> { ... }
         if battery < <n>% { ... }
         parallel { ... }
 
-        // Reactive triggers
         on battery < <n>% { ... }
         on battery > <n>% { ... }
         on wind    > <n>m/s { ... }
         on wind    < <n>m/s { ... }
         on obstacle_detected { ... }
+
+        // Custom sensor triggers (requires sensor declaration above)
+        on <sensor_name> < <value> { ... }
+        on <sensor_name> > <value> { ... }
     }
 }
 ```
-
-### Units
 
 | Suffix | Meaning |
 |--------|---------|
@@ -211,9 +188,49 @@ mission "name" {
 | `%` | percent |
 | `deg` | degrees |
 
+### Sensor Bindings
+
+Bind any supported MAVLink telemetry field to a named sensor, then use it in reactive triggers:
+
+```vosa
+sensor roll_angle   from ATTITUDE.roll
+sensor gps_hdop     from GPS_RAW_INT.eph
+sensor climb_rate   from VFR_HUD.climb
+sensor ground_speed from VFR_HUD.groundspeed
+
+on roll_angle > 0.45 { hover(10s)       }
+on gps_hdop   > 500  { hover(20s)       }
+on climb_rate < -3.0 { return_home()    }
+```
+
+Sensor names are validated at compile time (`vosa check`). On real hardware, values come from live MAVLink telemetry. In simulation, custom sensors read as `0.0`.
+
+**Supported sources:**
+
+| Message | Fields |
+|---------|--------|
+| `ATTITUDE` | `roll`, `pitch`, `yaw`, `rollspeed`, `pitchspeed`, `yawspeed` |
+| `VFR_HUD` | `airspeed`, `groundspeed`, `alt`, `climb` |
+| `WIND_COV` | `wind_x`, `wind_y` |
+| `GPS_RAW_INT` | `eph`, `epv`, `satellites_visible` |
+| `SYS_STATUS` | `battery_remaining` |
+| `DISTANCE_SENSOR` | `current_distance` |
+
 ---
 
-## Architecture
+## Example Missions
+
+| File | What it demonstrates |
+|------|-------------|
+| `examples/hello_world.vosa` | Minimal takeoff and land |
+| `examples/perimeter_scan.vosa` | Geofenced perimeter survey |
+| `examples/photo_survey.vosa` | Multi-waypoint photographic transect |
+| `examples/parallel_survey.vosa` | Parallel multi-drone blocks |
+| `examples/reactive_mission.vosa` | Full reactive mission — battery, wind, obstacle triggers |
+
+---
+
+## How It Works
 
 ```
 Source (.vosa)
@@ -225,34 +242,13 @@ Lexer  →  Vec<Token>
 Parser →  Mission AST
     │
     ▼
-SafetySandbox  →  pre-flight validation (altitude, speed, geofence, hover duration)
+Safety Sandbox  →  pre-flight validation (altitude, speed, geofence, battery)
     │
     ▼
 Runtime (sim) or Hardware Bridge
-    ├── MAVLink  →  PX4 / ArduPilot (MISSION_ITEM_INT protocol, live telemetry)
-    └── ROS 2    →  MAVROS (/mavros/setpoint_raw/global)
+    ├── MAVLink  →  PX4 / ArduPilot
+    └── ROS 2    →  MAVROS
 ```
-
-```
-src/
-├── lexer/         — tokeniser
-├── parser/        — recursive-descent parser + AST
-├── safety/        — pre-flight safety sandbox
-├── runtime/       — simulator + reactive trigger engine
-└── hw_bridge/     — MAVLink and ROS 2 bridges
-```
-
----
-
-## Examples
-
-| File | Description |
-|------|-------------|
-| `examples/hello_world.vosa` | Minimal takeoff and land |
-| `examples/perimeter_scan.vosa` | Geofenced perimeter survey |
-| `examples/photo_survey.vosa` | Multi-waypoint photographic transect |
-| `examples/parallel_survey.vosa` | Parallel multi-drone blocks |
-| `examples/reactive_mission.vosa` | Full reactive mission — battery, wind, obstacle triggers |
 
 ---
 

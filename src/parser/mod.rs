@@ -85,6 +85,7 @@ impl Parser {
         let mut safety: Option<SafetyBlock> = None;
         let mut flight: Option<FlightConfig> = None;
         let mut sequence: Option<Sequence> = None;
+        let mut sensors: Vec<SensorBinding> = Vec::new();
 
         loop {
             match self.peek().clone() {
@@ -94,6 +95,7 @@ impl Parser {
                 TokenKind::Safety    => { self.advance(); safety = Some(self.parse_safety()?); }
                 TokenKind::Flight    => { self.advance(); flight = Some(self.parse_flight()?); }
                 TokenKind::Sequence  => { self.advance(); sequence = Some(self.parse_sequence()?); }
+                TokenKind::Sensor    => { self.advance(); sensors.push(self.parse_sensor_binding()?); }
                 other => return Err(self.parse_err(format!("unexpected token in mission body: {:?}", other))),
             }
         }
@@ -106,6 +108,7 @@ impl Parser {
             safety,
             flight,
             sequence: sequence.ok_or_else(|| self.parse_err("mission must have a sequence block"))?,
+            sensors,
         })
     }
 
@@ -380,6 +383,25 @@ impl Parser {
         Ok(Statement::OnCondition { condition, body })
     }
 
+    /// Parse a `sensor <name> from <MESSAGE>.<field>` declaration.
+    fn parse_sensor_binding(&mut self) -> Result<SensorBinding, VosaError> {
+        let name = match self.consume() {
+            TokenKind::Ident(s) => s,
+            other => return Err(self.parse_err(format!("expected sensor name after 'sensor', got {:?}", other))),
+        };
+        self.expect(&TokenKind::From)?;
+        let message = match self.consume() {
+            TokenKind::Ident(s) => s,
+            other => return Err(self.parse_err(format!("expected MAVLink message name after 'from', got {:?}", other))),
+        };
+        self.expect(&TokenKind::Dot)?;
+        let field = match self.consume() {
+            TokenKind::Ident(s) => s,
+            other => return Err(self.parse_err(format!("expected field name after '.', got {:?}", other))),
+        };
+        Ok(SensorBinding { name, message, field })
+    }
+
     /// Parse a single (non-compound) trigger condition.
     fn parse_single_condition(&mut self) -> Result<TriggerCondition, VosaError> {
         match self.consume() {
@@ -410,8 +432,20 @@ impl Parser {
                 Ok(TriggerCondition::Wind { operator, threshold_ms })
             }
             TokenKind::ObstacleDetected => Ok(TriggerCondition::ObstacleDetected),
+            // Custom sensor declared via `sensor <name> from MESSAGE.field`
+            TokenKind::Ident(name) => {
+                let operator = match self.consume() {
+                    TokenKind::LessThan    => Operator::LessThan,
+                    TokenKind::GreaterThan => Operator::GreaterThan,
+                    other => return Err(self.parse_err(format!(
+                        "expected '<' or '>' after sensor name '{name}', got {:?}", other
+                    ))),
+                };
+                let threshold = self.expect_number()?;
+                Ok(TriggerCondition::Custom { name, operator, threshold })
+            }
             other => Err(self.parse_err(format!(
-                "'on' supports: battery, wind, obstacle_detected — got {:?}", other
+                "'on' supports: battery, wind, obstacle_detected, or a declared sensor name — got {:?}", other
             ))),
         }
     }

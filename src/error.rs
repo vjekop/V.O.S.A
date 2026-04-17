@@ -12,6 +12,9 @@ pub enum VosaError {
     #[error("Safety violation: {0}")]
     SafetyViolation(String),
 
+    #[error("Failsafe triggered: {0}")]
+    FailsafeTriggered(String),
+
     #[error("Runtime error: {0}")]
     RuntimeError(String),
 

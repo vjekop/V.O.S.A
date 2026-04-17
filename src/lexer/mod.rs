@@ -103,6 +103,7 @@ impl Lexer {
             ',' => { self.advance(); TokenKind::Comma }
             '<' => { self.advance(); TokenKind::LessThan }
             '>' => { self.advance(); TokenKind::GreaterThan }
+            '.' => { self.advance(); TokenKind::Dot }
             '"' => self.lex_string()?,
             c if c.is_ascii_digit() || (c == '-' && self.peek2().map_or(false, |d| d.is_ascii_digit())) => {
                 self.lex_number()?
@@ -248,6 +249,9 @@ impl Lexer {
             "on"                => TokenKind::On,
             "and"               => TokenKind::And,
             "or"                => TokenKind::Or,
+            // Sensor bindings
+            "sensor"            => TokenKind::Sensor,
+            "from"              => TokenKind::From,
             // Booleans
             "true"          => TokenKind::Bool(true),
             "false"         => TokenKind::Bool(false),

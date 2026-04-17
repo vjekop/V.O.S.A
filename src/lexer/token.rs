@@ -117,6 +117,12 @@ pub enum TokenKind {
     /// `or` — logical OR between two trigger conditions
     Or,
 
+    // ── Sensor binding keywords ───────────────────────────────────────────────
+    /// `sensor` — declares a named telemetry binding
+    Sensor,
+    /// `from` — separates the sensor name from its MAVLink source
+    From,
+
     // ── Generic identifier (for anything not a keyword) ───────────────────────
     Ident(String),
 
@@ -127,6 +133,7 @@ pub enum TokenKind {
     RParen,
     Colon,
     Comma,
+    Dot,
     LessThan,
     GreaterThan,
 

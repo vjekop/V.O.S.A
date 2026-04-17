@@ -124,6 +124,11 @@ fn cmd_run(file: PathBuf, print_ast: bool, mavlink: Option<String>, ros2: Option
             println!("  Max Alt : {:.1} m", report.max_altitude_m);
             println!("\n{}", "Mission complete.".green().bold());
         }
+        Err(vosa::error::VosaError::FailsafeTriggered(msg)) => {
+            eprintln!("{} {msg}", "failsafe triggered:".yellow().bold());
+            eprintln!("Mission aborted safely. Check your battery reserve and mission length.");
+            std::process::exit(4);
+        }
         Err(e) => {
             eprintln!("{} {e}", "runtime error:".red().bold());
             std::process::exit(3);
@@ -261,6 +266,31 @@ vehicle, safety, and flight sub-blocks, plus a required sequence.
   vosa run   <file.vosa> --ros2 0
   vosa check <file.vosa>          Validate without running
   vosa docs                       Show this reference
+
+─── Sensor Bindings ─────────────────────────────────────────
+  Declare a named sensor from any supported MAVLink field,
+  then use it in reactive trigger conditions:
+
+    sensor <name> from <MESSAGE>.<field>
+
+  Example:
+    sensor roll_angle  from ATTITUDE.roll
+    sensor gps_hdop    from GPS_RAW_INT.eph
+
+    on roll_angle > 0.45 { return_home() }
+    on gps_hdop   > 500  { hover(20s)    }
+
+  Sensor bindings are validated at compile time (vosa check).
+  On real hardware, values come from live MAVLink telemetry.
+  In simulation, custom sensors read as 0.0.
+
+  Supported sources:
+    ATTITUDE        roll, pitch, yaw, rollspeed, pitchspeed, yawspeed
+    VFR_HUD         airspeed, groundspeed, alt, climb
+    WIND_COV        wind_x, wind_y
+    GPS_RAW_INT     eph, epv, satellites_visible
+    SYS_STATUS      battery_remaining
+    DISTANCE_SENSOR current_distance
 
 ─── Examples ────────────────────────────────────────────────
   examples/hello_world.vosa       Minimal takeoff and land

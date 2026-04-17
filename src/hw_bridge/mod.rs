@@ -1,6 +1,7 @@
 use crate::error::VosaError;
 use crate::parser::ast::*;
 use crate::runtime::ExecutionReport;
+use std::collections::HashMap;
 use mavlink::common::{self, MavMessage};
 use mavlink::MavConnection;
 
@@ -33,14 +34,16 @@ const PX4_CUSTOM_SUB_MODE_AUTO_LAND: f32 = 6.0;
 /// Live vehicle state updated from MAVLink telemetry messages.
 /// This is what drives the reactive trigger system on real hardware —
 /// conditions are evaluated against actual sensor readings, not simulated values.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone)]
 struct TelemetryState {
-    /// Battery remaining (%), -1 if unknown
+    /// Battery remaining (%), -1.0 until first SYS_STATUS received
     battery_percent: f64,
     /// Wind speed magnitude (m/s), derived from WIND_COV
     wind_speed_ms: f64,
     /// Obstacle detected (populated from OBSTACLE_DISTANCE or companion computer)
     obstacle_detected: bool,
+    /// Current values of user-declared custom sensors, updated from MAVLink messages
+    custom_sensors: HashMap<String, f64>,
     /// GPS fix type: 0=none, 2=2D, 3=3D, 4=DGPS, 5=RTK float, 6=RTK fixed
     gps_fix_type: u8,
     /// Home position received from autopilot
@@ -49,6 +52,21 @@ struct TelemetryState {
     home_lat: f64,
     /// Home longitude in degrees
     home_lon: f64,
+}
+
+impl Default for TelemetryState {
+    fn default() -> Self {
+        TelemetryState {
+            battery_percent: -1.0,
+            wind_speed_ms: 0.0,
+            obstacle_detected: false,
+            gps_fix_type: 0,
+            home_set: false,
+            home_lat: 0.0,
+            home_lon: 0.0,
+            custom_sensors: HashMap::new(),
+        }
+    }
 }
 
 impl TelemetryState {
@@ -77,8 +95,56 @@ impl TelemetryState {
                 self.wind_speed_ms =
                     ((d.wind_x as f64).powi(2) + (d.wind_y as f64).powi(2)).sqrt();
             }
+            // Obstacle detection: DISTANCE_SENSOR reports a single range reading.
+            // Flag an obstacle if the sensor is not pointing down and reads < 5 m (500 cm).
+            MavMessage::DISTANCE_SENSOR(d) => {
+                use common::MavSensorOrientation::MAV_SENSOR_ROTATION_PITCH_270;
+                let is_downward = d.orientation == MAV_SENSOR_ROTATION_PITCH_270;
+                if !is_downward {
+                    self.obstacle_detected = d.current_distance < 500;
+                }
+            }
+            // OBSTACLE_DISTANCE reports distances across 72 angular sectors (cm).
+            // Flag an obstacle if any valid sector reads < 5 m (500 cm).
+            MavMessage::OBSTACLE_DISTANCE(d) => {
+                self.obstacle_detected = d.distances.iter().any(|&dist| dist > 0 && dist < 500);
+            }
             _ => {}
         }
+    }
+
+    /// Update custom sensor values from a MAVLink message using the mission's sensor bindings.
+    fn update_sensors(&mut self, bindings: &[SensorBinding], msg: &MavMessage) {
+        for binding in bindings {
+            if let Some(value) = extract_sensor_value(&binding.message, &binding.field, msg) {
+                self.custom_sensors.insert(binding.name.clone(), value);
+            }
+        }
+    }
+}
+
+/// Extract a numeric value from a MAVLink message by message type and field name.
+/// Returns `None` if the message type doesn't match or the field isn't supported.
+fn extract_sensor_value(message: &str, field: &str, msg: &MavMessage) -> Option<f64> {
+    match (message, field, msg) {
+        ("ATTITUDE", "roll",      MavMessage::ATTITUDE(d)) => Some(d.roll as f64),
+        ("ATTITUDE", "pitch",     MavMessage::ATTITUDE(d)) => Some(d.pitch as f64),
+        ("ATTITUDE", "yaw",       MavMessage::ATTITUDE(d)) => Some(d.yaw as f64),
+        ("ATTITUDE", "rollspeed", MavMessage::ATTITUDE(d)) => Some(d.rollspeed as f64),
+        ("ATTITUDE", "pitchspeed",MavMessage::ATTITUDE(d)) => Some(d.pitchspeed as f64),
+        ("ATTITUDE", "yawspeed",  MavMessage::ATTITUDE(d)) => Some(d.yawspeed as f64),
+        ("VFR_HUD", "airspeed",   MavMessage::VFR_HUD(d))  => Some(d.airspeed as f64),
+        ("VFR_HUD", "groundspeed",MavMessage::VFR_HUD(d))  => Some(d.groundspeed as f64),
+        ("VFR_HUD", "alt",        MavMessage::VFR_HUD(d))  => Some(d.alt as f64),
+        ("VFR_HUD", "climb",      MavMessage::VFR_HUD(d))  => Some(d.climb as f64),
+        ("WIND_COV", "wind_x",    MavMessage::WIND_COV(d)) => Some(d.wind_x as f64),
+        ("WIND_COV", "wind_y",    MavMessage::WIND_COV(d)) => Some(d.wind_y as f64),
+        ("GPS_RAW_INT", "eph",                MavMessage::GPS_RAW_INT(d)) => Some(d.eph as f64),
+        ("GPS_RAW_INT", "epv",                MavMessage::GPS_RAW_INT(d)) => Some(d.epv as f64),
+        ("GPS_RAW_INT", "satellites_visible", MavMessage::GPS_RAW_INT(d)) => Some(d.satellites_visible as f64),
+        ("SYS_STATUS", "battery_remaining",   MavMessage::SYS_STATUS(d))  => Some(d.battery_remaining as f64),
+        ("DISTANCE_SENSOR", "current_distance", MavMessage::DISTANCE_SENSOR(d)) => Some(d.current_distance as f64),
+        _ => None,
     }
 }
 
@@ -278,7 +344,7 @@ impl MavlinkBridge {
             })
             .collect::<Vec<_>>();
 
-        monitor_mission(&vehicle, &mut telemetry, &mut triggers, item_count, &mut steps)?;
+        monitor_mission(&vehicle, &mut telemetry, &mut triggers, item_count, &mut steps, mission.safety.as_ref(), &mission.sensors)?;
 
         // ── 9. Return to launch after waypoints complete ──────────────────────
         println!("[MAVLink] Waypoints complete — sending RTL");
@@ -340,6 +406,8 @@ fn monitor_mission<C: MavConnection<MavMessage>>(
     triggers: &mut Vec<ActiveTrigger>,
     item_count: usize,
     steps: &mut Vec<crate::runtime::ExecutionStep>,
+    safety: Option<&SafetyBlock>,
+    sensor_bindings: &[SensorBinding],
 ) -> Result<(), VosaError> {
     // Send a GCS heartbeat every 1 s based on wall-clock time, not message count.
     // PX4 triggers a GCS-lost failsafe if it doesn't receive a heartbeat for >3 s.
@@ -355,6 +423,42 @@ fn monitor_mission<C: MavConnection<MavMessage>>(
         match vehicle.recv() {
             Ok((_, msg)) => {
                 telemetry.update(&msg);
+                telemetry.update_sensors(sensor_bindings, &msg);
+
+                // Enforce declared failsafe threshold (independent of user on-triggers).
+                // Only fires once battery is known (> 0).
+                if let Some(s) = safety {
+                    if let (Some(reserve), Some(action)) = (s.battery_reserve, &s.failsafe) {
+                        if telemetry.battery_percent >= 0.0 && telemetry.battery_percent < reserve {
+                            let desc = format!(
+                                "[FAILSAFE] battery {:.1}% < reserve {reserve}% — executing {action:?}",
+                                telemetry.battery_percent
+                            );
+                            println!("[MAVLink] {desc}");
+                            steps.push(crate::runtime::ExecutionStep {
+                                index: steps.len(),
+                                description: desc,
+                            });
+                            match action {
+                                FailsafeAction::ReturnHome => {
+                                    set_flight_mode(vehicle, PX4_CUSTOM_MAIN_MODE_AUTO, PX4_CUSTOM_SUB_MODE_AUTO_RTL)?;
+                                }
+                                FailsafeAction::Land => {
+                                    set_flight_mode(vehicle, PX4_CUSTOM_MAIN_MODE_AUTO, PX4_CUSTOM_SUB_MODE_AUTO_LAND)?;
+                                }
+                                FailsafeAction::Hover => {
+                                    send_command_long(
+                                        vehicle,
+                                        common::MavCmd::MAV_CMD_NAV_LOITER_UNLIM,
+                                        [0.0; 7],
+                                    )?;
+                                }
+                            }
+                            println!("[MAVLink] Failsafe executed — mission aborted safely");
+                            return Ok(());
+                        }
+                    }
+                }
 
                 // Log waypoint progress — deduplicate repeated MISSION_ITEM_REACHED
                 if let MavMessage::MISSION_ITEM_REACHED(data) = &msg {
@@ -462,6 +566,13 @@ fn eval_trigger(condition: &TriggerCondition, t: &TelemetryState) -> bool {
             Operator::GreaterThan => t.wind_speed_ms > *threshold_ms,
         },
         TriggerCondition::ObstacleDetected => t.obstacle_detected,
+        TriggerCondition::Custom { name, operator, threshold } => {
+            let value = t.custom_sensors.get(name).copied().unwrap_or(0.0);
+            match operator {
+                Operator::LessThan    => value < *threshold,
+                Operator::GreaterThan => value > *threshold,
+            }
+        }
         TriggerCondition::And(a, b) => eval_trigger(a, t) && eval_trigger(b, t),
         TriggerCondition::Or(a, b)  => eval_trigger(a, t) || eval_trigger(b, t),
     }
@@ -721,6 +832,10 @@ fn trigger_label(condition: &TriggerCondition) -> String {
             format!("wind {op} {threshold_ms}m/s")
         }
         TriggerCondition::ObstacleDetected => "obstacle_detected".into(),
+        TriggerCondition::Custom { name, operator, threshold } => {
+            let op = if *operator == Operator::LessThan { "<" } else { ">" };
+            format!("{name} {op} {threshold}")
+        }
         TriggerCondition::And(a, b) => format!("{} and {}", trigger_label(a), trigger_label(b)),
         TriggerCondition::Or(a, b)  => format!("{} or {}",  trigger_label(a), trigger_label(b)),
     }
