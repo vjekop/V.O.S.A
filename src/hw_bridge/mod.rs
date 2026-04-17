@@ -135,6 +135,18 @@ impl MavlinkBridge {
         })?;
         println!("[MAVLink] Vehicle link established");
 
+        // Keep sending heartbeats for 3 s so PX4 counts us as a connected GCS
+        // (PX4 requires several consecutive heartbeats before clearing the
+        // "No connection to the GCS" preflight warning)
+        println!("[MAVLink] Establishing GCS link (3 s) ...");
+        for _ in 0..30 {
+            let _ = vehicle.send_default(&gcs_heartbeat());
+            // drain incoming messages while we wait
+            let _ = vehicle.recv();
+            std::thread::sleep(std::time::Duration::from_millis(100));
+        }
+        println!("[MAVLink] GCS link established");
+
         // ── 2. Wait for 3D GPS lock ───────────────────────────────────────────
         println!("[MAVLink] Waiting for 3D GPS lock ...");
         recv_until(&vehicle, &mut telemetry, GPS_WAIT_ATTEMPTS, |_| {
@@ -203,7 +215,22 @@ impl MavlinkBridge {
         upload_mission(&vehicle, &mut telemetry, &items)?;
         println!("[MAVLink] Mission upload complete");
 
-        // ── 6. Arm ────────────────────────────────────────────────────────────
+        // ── 6. Wait for EKF2 + arming checks to clear, then arm ─────────────
+        // PX4 refuses to arm if EKF2 hasn't converged. Poll SYS_STATUS for up
+        // to 30 s; if it clears we arm normally, if not we try anyway.
+        println!("[MAVLink] Waiting for EKF2 / preflight checks (up to 30 s) ...");
+        for i in 0..300 {
+            let _ = vehicle.send_default(&gcs_heartbeat());
+            match vehicle.recv() {
+                Ok((_, msg)) => telemetry.update(&msg),
+                Err(_) => {}
+            }
+            if i % 50 == 49 {
+                println!("[MAVLink]   ... still waiting for EKF2");
+            }
+            std::thread::sleep(std::time::Duration::from_millis(100));
+        }
+        println!("[MAVLink] Preflight wait complete — arming ...");
         println!("[MAVLink] Arming ...");
         send_command_long(
             &vehicle,

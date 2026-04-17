@@ -1,0 +1,59 @@
+// sim_mission.vosa
+//
+// A mission tuned for PX4 SITL / Gazebo testing.
+// Waypoints are near the default PX4 SITL home position (Zurich, ~47.397°N 8.545°E).
+// Each waypoint is ~50-100 m from home so the drone visibly moves in the sim.
+//
+// Run with:
+//   ./target/release/vosa run examples/sim_mission.vosa --mavlink udpin:0.0.0.0:14550
+
+mission "sim_survey" {
+
+  vehicle: Quadcopter
+
+  safety {
+    max_altitude: 120m
+    min_altitude: 5m
+    max_speed: 15m/s
+    battery_reserve: 10%
+    failsafe: return_home
+    geofence: circle(center: home, radius: 2000m)
+  }
+
+  flight {
+    cruise_altitude: 30m
+    cruise_speed: 5m/s
+  }
+
+  sequence {
+
+    // ── Reactive triggers ────────────────────────────────────────────────
+    on battery < 20% {
+      return_home()
+      land()
+    }
+
+    on wind > 12m/s {
+      hover(10s)
+    }
+
+    on obstacle_detected {
+      hover(5s)
+      return_home()
+      land()
+    }
+
+    // ── Flight plan (Zurich SITL home ≈ 47.3977°N, 8.5456°E) ────────────
+    // Each step is ~50 m offset — clearly visible movement in Gazebo.
+
+    takeoff(30m)
+
+    waypoint(lat: 47.3982, lon: 8.5456, alt: 30m)   // ~50 m north
+    waypoint(lat: 47.3987, lon: 8.5456, alt: 30m)   // ~100 m north
+    waypoint(lat: 47.3987, lon: 8.5461, alt: 30m)   // cross leg east
+    waypoint(lat: 47.3982, lon: 8.5461, alt: 30m)   // south
+    waypoint(lat: 47.3977, lon: 8.5461, alt: 30m)   // back to home longitude
+
+    return_home()
+  }
+}
