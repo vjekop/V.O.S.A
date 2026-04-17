@@ -82,7 +82,7 @@ mission "reactive_survey" {
 
     camera(action: photo, resolution: "4K")
 
+    // return_home() includes auto-landing in PX4 — no explicit land() needed
     return_home()
-    land()
   }
 }
