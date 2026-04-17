@@ -112,6 +112,10 @@ pub enum TokenKind {
     // ── Reactive trigger keyword ──────────────────────────────────────────────
     /// `on` — introduces a reactive trigger block
     On,
+    /// `and` — logical AND between two trigger conditions
+    And,
+    /// `or` — logical OR between two trigger conditions
+    Or,
 
     // ── Generic identifier (for anything not a keyword) ───────────────────────
     Ident(String),

@@ -246,6 +246,8 @@ impl Lexer {
             "obstacle_detected" => TokenKind::ObstacleDetected,
             // Reactive trigger
             "on"                => TokenKind::On,
+            "and"               => TokenKind::And,
+            "or"                => TokenKind::Or,
             // Booleans
             "true"          => TokenKind::Bool(true),
             "false"         => TokenKind::Bool(false),

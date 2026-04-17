@@ -118,6 +118,10 @@ pub enum Operator {
 /// Triggers fire on the rising edge — i.e. when the condition transitions
 /// from false to true. They reset automatically when the condition becomes
 /// false again, so they can re-fire if the situation recurs.
+///
+/// Conditions can be combined:
+///   `on battery < 30% and wind > 8m/s { ... }`
+///   `on battery < 20% or obstacle_detected { ... }`
 #[derive(Debug, Clone)]
 pub enum TriggerCondition {
     /// Fires when battery % crosses the threshold in the specified direction
@@ -132,6 +136,10 @@ pub enum TriggerCondition {
     },
     /// Fires when an obstacle is detected by onboard sensors
     ObstacleDetected,
+    /// Both conditions must be true simultaneously
+    And(Box<TriggerCondition>, Box<TriggerCondition>),
+    /// Either condition must be true
+    Or(Box<TriggerCondition>, Box<TriggerCondition>),
 }
 
 #[derive(Debug, Clone)]

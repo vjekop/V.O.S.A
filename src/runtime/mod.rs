@@ -343,6 +343,12 @@ fn eval_condition(
             Operator::GreaterThan => wind > *threshold_ms,
         },
         TriggerCondition::ObstacleDetected => obstacle,
+        TriggerCondition::And(a, b) => {
+            eval_condition(a, battery, wind, obstacle) && eval_condition(b, battery, wind, obstacle)
+        }
+        TriggerCondition::Or(a, b) => {
+            eval_condition(a, battery, wind, obstacle) || eval_condition(b, battery, wind, obstacle)
+        }
     }
 }
 
@@ -358,6 +364,8 @@ fn condition_label(condition: &TriggerCondition) -> String {
             format!("wind {op} {threshold_ms}m/s")
         }
         TriggerCondition::ObstacleDetected => "obstacle_detected".to_string(),
+        TriggerCondition::And(a, b) => format!("{} and {}", condition_label(a), condition_label(b)),
+        TriggerCondition::Or(a, b)  => format!("{} or {}",  condition_label(a), condition_label(b)),
     }
 }
 

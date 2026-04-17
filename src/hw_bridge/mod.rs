@@ -379,8 +379,11 @@ fn monitor_mission<C: MavConnection<MavMessage>>(
                     }
                 }
 
-                // Evaluate reactive triggers after every telemetry update
-                fire_triggers(vehicle, telemetry, triggers, steps)?;
+                // Evaluate reactive triggers — exit cleanly if one aborted the mission
+                if fire_triggers(vehicle, telemetry, triggers, steps)? {
+                    println!("[MAVLink] Mission aborted by trigger — RTL in progress");
+                    return Ok(());
+                }
             }
             Err(e) => {
                 return Err(VosaError::RuntimeError(format!(
@@ -393,34 +396,58 @@ fn monitor_mission<C: MavConnection<MavMessage>>(
 
 /// Evaluate all registered triggers against current telemetry.
 /// Fires on rising edge (false → true); resets when condition clears.
+/// Returns `true` if a trigger fired an abort (RTL/Land) — caller should
+/// exit the monitor loop cleanly.
 fn fire_triggers<C: MavConnection<MavMessage>>(
     vehicle: &C,
     telemetry: &TelemetryState,
     triggers: &mut Vec<ActiveTrigger>,
     steps: &mut Vec<crate::runtime::ExecutionStep>,
-) -> Result<(), VosaError> {
+) -> Result<bool, VosaError> {
     for trigger in triggers.iter_mut() {
         let condition_met = eval_trigger(&trigger.condition, telemetry);
 
         if condition_met && !trigger.fired {
             trigger.fired = true;
             let label = trigger_label(&trigger.condition);
-            println!("[MAVLink] TRIGGER FIRED: on {label}  batt={:.1}%  wind={:.1}m/s",
+            println!("[MAVLink] ⚡ TRIGGER FIRED: on {label}  batt={:.1}%  wind={:.1}m/s",
                 telemetry.battery_percent, telemetry.wind_speed_ms);
             steps.push(crate::runtime::ExecutionStep {
                 index: steps.len(),
                 description: format!("[TRIGGER FIRED] on {label}"),
             });
 
-            // Execute each command in the trigger body
+            // Execute trigger body — skip Land if ReturnHome already sent
+            // (RTL mode includes auto-landing, a second Land command is redundant)
+            let mut rtl_sent = false;
+            let mut aborted = false;
             for cmd in &trigger.commands.clone() {
-                execute_trigger_command(vehicle, cmd, steps)?;
+                match cmd {
+                    Command::Land if rtl_sent => {
+                        println!("[MAVLink] [TRIGGER] Skipping land() — RTL already includes auto-land");
+                    }
+                    Command::ReturnHome => {
+                        execute_trigger_command(vehicle, cmd, steps)?;
+                        rtl_sent = true;
+                        aborted = true;
+                    }
+                    Command::Land => {
+                        execute_trigger_command(vehicle, cmd, steps)?;
+                        aborted = true;
+                    }
+                    other => {
+                        execute_trigger_command(vehicle, other, steps)?;
+                    }
+                }
+            }
+            if aborted {
+                return Ok(true); // signal clean exit to monitor loop
             }
         } else if !condition_met {
             trigger.fired = false;
         }
     }
-    Ok(())
+    Ok(false)
 }
 
 /// Evaluate a trigger condition against live telemetry.
@@ -435,6 +462,8 @@ fn eval_trigger(condition: &TriggerCondition, t: &TelemetryState) -> bool {
             Operator::GreaterThan => t.wind_speed_ms > *threshold_ms,
         },
         TriggerCondition::ObstacleDetected => t.obstacle_detected,
+        TriggerCondition::And(a, b) => eval_trigger(a, t) && eval_trigger(b, t),
+        TriggerCondition::Or(a, b)  => eval_trigger(a, t) || eval_trigger(b, t),
     }
 }
 
@@ -692,6 +721,8 @@ fn trigger_label(condition: &TriggerCondition) -> String {
             format!("wind {op} {threshold_ms}m/s")
         }
         TriggerCondition::ObstacleDetected => "obstacle_detected".into(),
+        TriggerCondition::And(a, b) => format!("{} and {}", trigger_label(a), trigger_label(b)),
+        TriggerCondition::Or(a, b)  => format!("{} or {}",  trigger_label(a), trigger_label(b)),
     }
 }
 

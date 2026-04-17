@@ -357,7 +357,32 @@ impl Parser {
     fn parse_on(&mut self) -> Result<Statement, VosaError> {
         self.expect(&TokenKind::On)?;
 
-        let condition = match self.consume() {
+        // Parse first (left-hand) condition, then look for `and` / `or`
+        let mut condition = self.parse_single_condition()?;
+
+        loop {
+            match self.peek() {
+                TokenKind::And => {
+                    self.advance();
+                    let right = self.parse_single_condition()?;
+                    condition = TriggerCondition::And(Box::new(condition), Box::new(right));
+                }
+                TokenKind::Or => {
+                    self.advance();
+                    let right = self.parse_single_condition()?;
+                    condition = TriggerCondition::Or(Box::new(condition), Box::new(right));
+                }
+                _ => break,
+            }
+        }
+
+        let body = self.parse_sequence()?;
+        Ok(Statement::OnCondition { condition, body })
+    }
+
+    /// Parse a single (non-compound) trigger condition.
+    fn parse_single_condition(&mut self) -> Result<TriggerCondition, VosaError> {
+        match self.consume() {
             TokenKind::Battery => {
                 let operator = match self.consume() {
                     TokenKind::LessThan    => Operator::LessThan,
@@ -369,7 +394,7 @@ impl Parser {
                     TokenKind::Number(v) => v,
                     other => return Err(self.parse_err(format!("expected battery % threshold, got {:?}", other))),
                 };
-                TriggerCondition::Battery { operator, threshold_percent }
+                Ok(TriggerCondition::Battery { operator, threshold_percent })
             }
             TokenKind::Wind => {
                 let operator = match self.consume() {
@@ -382,16 +407,13 @@ impl Parser {
                     TokenKind::Number(v) => v,
                     other => return Err(self.parse_err(format!("expected wind speed (m/s) threshold, got {:?}", other))),
                 };
-                TriggerCondition::Wind { operator, threshold_ms }
+                Ok(TriggerCondition::Wind { operator, threshold_ms })
             }
-            TokenKind::ObstacleDetected => TriggerCondition::ObstacleDetected,
-            other => return Err(self.parse_err(format!(
+            TokenKind::ObstacleDetected => Ok(TriggerCondition::ObstacleDetected),
+            other => Err(self.parse_err(format!(
                 "'on' supports: battery, wind, obstacle_detected — got {:?}", other
             ))),
-        };
-
-        let body = self.parse_sequence()?;
-        Ok(Statement::OnCondition { condition, body })
+        }
     }
 
     fn parse_command(&mut self) -> Result<Command, VosaError> {
