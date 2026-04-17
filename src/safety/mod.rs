@@ -68,10 +68,21 @@ impl SafetySandbox {
     fn check_statement(&self, stmt: &Statement, safety: &SafetyBlock) -> Result<(), VosaError> {
         match stmt {
             Statement::Command(cmd) => self.check_command(cmd, safety)?,
+            Statement::OnCondition { duration_s, body, .. } => {
+                if let Some(d) = duration_s {
+                    if *d <= 0.0 {
+                        return Err(VosaError::SafetyViolation(
+                            "trigger 'for' duration must be greater than 0 seconds".into(),
+                        ));
+                    }
+                }
+                for inner in &body.statements {
+                    self.check_statement(inner, safety)?;
+                }
+            }
             Statement::Repeat { body, .. }
             | Statement::IfBattery { body, .. }
-            | Statement::Parallel { body }
-            | Statement::OnCondition { body, .. } => {
+            | Statement::Parallel { body } => {
                 for inner in &body.statements {
                     self.check_statement(inner, safety)?;
                 }
@@ -176,6 +187,7 @@ impl SafetySandbox {
                     self.check_geofence_stmt(inner, clat, clon, radius)?;
                 }
             }
+
         }
         Ok(())
     }
@@ -253,7 +265,7 @@ impl SafetySandbox {
             .statements
             .iter()
             .filter_map(|s| match s {
-                Statement::OnCondition { condition, body } => Some((condition, body)),
+                Statement::OnCondition { condition, body, .. } => Some((condition, body)),
                 _ => None,
             })
             .collect();
@@ -309,7 +321,7 @@ impl SafetySandbox {
         declared: &HashSet<&str>,
     ) -> Result<(), VosaError> {
         match stmt {
-            Statement::OnCondition { condition, body } => {
+            Statement::OnCondition { condition, body, .. } => {
                 self.check_sensor_refs_condition(condition, declared)?;
                 for inner in &body.statements {
                     self.check_sensor_refs_stmt(inner, declared)?;
@@ -399,7 +411,7 @@ fn collect_waypoints(stmts: &[Statement], out: &mut Vec<(f64, f64)>) {
             | Statement::OnCondition { body, .. } => {
                 collect_waypoints(&body.statements, out);
             }
-            _ => {}
+            Statement::Command(_) => {}
         }
     }
 }
@@ -708,6 +720,7 @@ mod tests {
                         operator: Operator::LessThan,
                         threshold_percent: 20.0,
                     },
+                    duration_s: None,
                     body: Sequence {
                         statements: vec![Statement::Command(Command::ReturnHome)],
                     },
@@ -717,6 +730,7 @@ mod tests {
                         operator: Operator::LessThan,
                         threshold_percent: 40.0,
                     },
+                    duration_s: None,
                     body: Sequence {
                         statements: vec![Statement::Command(Command::ReturnHome)],
                     },
@@ -737,12 +751,14 @@ mod tests {
                         operator: Operator::LessThan,
                         threshold_percent: 20.0,
                     },
+                    duration_s: None,
                     body: Sequence {
                         statements: vec![Statement::Command(Command::ReturnHome)],
                     },
                 },
                 Statement::OnCondition {
                     condition: TriggerCondition::ObstacleDetected,
+                    duration_s: None,
                     body: Sequence {
                         statements: vec![Statement::Command(Command::Land)],
                     },

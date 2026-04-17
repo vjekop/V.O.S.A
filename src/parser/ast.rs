@@ -123,9 +123,12 @@ pub enum Statement {
     },
     /// Execute inner sequence concurrently
     Parallel { body: Sequence },
-    /// Register a reactive trigger: body executes whenever `condition` becomes true
+    /// Register a reactive trigger: body executes when `condition` has been
+    /// continuously true for at least `duration_s` seconds (or immediately if None).
     OnCondition {
         condition: TriggerCondition,
+        /// If Some(d), the condition must hold continuously for d seconds before firing.
+        duration_s: Option<f64>,
         body: Sequence,
     },
 }

@@ -379,8 +379,16 @@ impl Parser {
             }
         }
 
+        // Optional `for <duration>` — condition must hold this long before firing
+        let duration_s = if self.peek() == &TokenKind::For {
+            self.advance();
+            Some(self.expect_number()?)
+        } else {
+            None
+        };
+
         let body = self.parse_sequence()?;
-        Ok(Statement::OnCondition { condition, body })
+        Ok(Statement::OnCondition { condition, duration_s, body })
     }
 
     /// Parse a `sensor <name> from <MESSAGE>.<field>` declaration.

@@ -122,6 +122,8 @@ pub enum TokenKind {
     Sensor,
     /// `from` — separates the sensor name from its MAVLink source
     From,
+    /// `for` — requires a condition to hold for a duration before firing
+    For,
 
     // ── Generic identifier (for anything not a keyword) ───────────────────────
     Ident(String),

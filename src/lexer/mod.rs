@@ -252,6 +252,8 @@ impl Lexer {
             // Sensor bindings
             "sensor"            => TokenKind::Sensor,
             "from"              => TokenKind::From,
+            // Temporal condition
+            "for"               => TokenKind::For,
             // Booleans
             "true"          => TokenKind::Bool(true),
             "false"         => TokenKind::Bool(false),

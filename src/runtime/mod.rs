@@ -26,7 +26,12 @@ pub struct ExecutionStep {
 struct ActiveTrigger {
     condition: TriggerCondition,
     body: Sequence,
-    /// True while the condition is currently satisfied (prevents re-firing)
+    /// If Some(d), condition must be continuously true for d seconds before firing.
+    duration_s: Option<f64>,
+    /// Simulated time (seconds) when the condition first became true in the current run.
+    /// None means the condition is currently false.
+    condition_true_since: Option<f64>,
+    /// True while the condition is currently satisfied (prevents re-firing until reset).
     fired: bool,
 }
 
@@ -73,6 +78,8 @@ pub struct Runtime {
     obstacle_detected: bool,
     /// Current values of user-declared custom sensors (always 0.0 in simulation)
     sensor_values: HashMap<String, f64>,
+    /// Simulated mission clock in seconds — advanced by each command's estimated duration
+    sim_time_s: f64,
     /// All registered `on` triggers accumulated during sequence execution
     triggers: Vec<ActiveTrigger>,
 }
@@ -91,6 +98,7 @@ impl Runtime {
             waypoints_visited: 0,
             obstacle_detected: false,
             sensor_values: HashMap::new(),
+            sim_time_s: 0.0,
             triggers: Vec::new(),
         }
     }
@@ -196,13 +204,18 @@ impl Runtime {
                     self.execute_statement(&inner_stmt, safety)?;
                 }
             }
-            Statement::OnCondition { condition, body } => {
-                // Register the trigger — it will be evaluated after each subsequent command.
+            Statement::OnCondition { condition, duration_s, body } => {
                 let label = condition_label(condition);
-                self.log(format!("[TRIGGER] Registered: on {label}"));
+                let dur_desc = match duration_s {
+                    Some(d) => format!(" for {d}s"),
+                    None => String::new(),
+                };
+                self.log(format!("[TRIGGER] Registered: on {label}{dur_desc}"));
                 self.triggers.push(ActiveTrigger {
                     condition: condition.clone(),
                     body: body.clone(),
+                    duration_s: *duration_s,
+                    condition_true_since: None,
                     fired: false,
                 });
             }
@@ -213,27 +226,51 @@ impl Runtime {
     /// Evaluate all registered triggers against current environmental state.
     /// Fires the body of any trigger whose condition just became true (rising edge).
     fn check_triggers(&mut self, safety: Option<&SafetyBlock>) -> Result<(), VosaError> {
-        // Snapshot state so borrow checker doesn't complain
-        let battery = self.battery_percent;
-        let wind = self.wind_speed_ms;
+        let battery  = self.battery_percent;
+        let wind     = self.wind_speed_ms;
         let obstacle = self.obstacle_detected;
-        let sensors = self.sensor_values.clone();
+        let sensors  = self.sensor_values.clone();
+        let now      = self.sim_time_s;
 
         let mut to_fire: Vec<usize> = Vec::new();
 
         for (i, trigger) in self.triggers.iter_mut().enumerate() {
             let condition_met = eval_condition(&trigger.condition, battery, wind, obstacle, &sensors);
-            if condition_met && !trigger.fired {
-                trigger.fired = true;
-                to_fire.push(i);
-            } else if !condition_met {
+
+            if condition_met {
+                if !trigger.fired {
+                    match trigger.duration_s {
+                        None => {
+                            // No duration guard — fire immediately on rising edge
+                            if trigger.condition_true_since.is_none() {
+                                trigger.condition_true_since = Some(now);
+                                trigger.fired = true;
+                                to_fire.push(i);
+                            }
+                        }
+                        Some(required) => {
+                            // Start the clock the first time we see the condition true
+                            let since = trigger.condition_true_since.get_or_insert(now);
+                            if now - *since >= required {
+                                trigger.fired = true;
+                                to_fire.push(i);
+                            }
+                        }
+                    }
+                }
+            } else {
+                // Condition cleared — reset so it can re-arm
                 trigger.fired = false;
+                trigger.condition_true_since = None;
             }
         }
 
         for i in to_fire {
             let label = condition_label(&self.triggers[i].condition);
-            self.log(format!("[TRIGGER] FIRED: on {label}"));
+            let dur = self.triggers[i].duration_s
+                .map(|d| format!(" (held {d}s)"))
+                .unwrap_or_default();
+            self.log(format!("[TRIGGER] FIRED: on {label}{dur}"));
             let body = self.triggers[i].body.clone();
             for stmt in &body.statements {
                 self.execute_statement(stmt, safety)?;
@@ -251,12 +288,14 @@ impl Runtime {
     ) -> Result<(), VosaError> {
         match cmd {
             Command::Takeoff { altitude } => {
+                self.sim_time_s += altitude / 3.0; // ~3 m/s vertical climb
                 self.current_alt = *altitude;
                 self.max_alt = self.max_alt.max(*altitude);
                 self.log(format!("[TAKEOFF] Ascending to {altitude}m"));
             }
 
             Command::Land => {
+                self.sim_time_s += self.current_alt / 2.0; // ~2 m/s descent
                 self.log(format!(
                     "[LAND] Descending from {:.1}m — disarming",
                     self.current_alt
@@ -265,6 +304,7 @@ impl Runtime {
             }
 
             Command::Hover { duration } => {
+                self.sim_time_s += duration;
                 self.log(format!("[HOVER] Holding position for {duration}s"));
             }
 
@@ -287,6 +327,7 @@ impl Runtime {
 
                 // ── Move to waypoint ──────────────────────────────────────────
                 let dist = haversine(self.current_lat, self.current_lon, *lat, *lon);
+                self.sim_time_s += dist / 10.0; // estimate 10 m/s cruise
                 self.drain_battery(dist);
                 self.total_distance += dist;
                 self.current_lat = *lat;
@@ -305,6 +346,7 @@ impl Runtime {
 
             Command::ReturnHome => {
                 let dist = haversine(self.current_lat, self.current_lon, 0.0, 0.0);
+                self.sim_time_s += dist / 10.0;
                 self.drain_battery(dist);
                 self.total_distance += dist;
                 self.log(format!("[RTH] Returning to home  [{dist:.0}m]"));
@@ -534,6 +576,7 @@ mod tests {
                         operator: Operator::LessThan,
                         threshold_percent: 99.0,
                     },
+                    duration_s: None,
                     body: Sequence {
                         statements: vec![Statement::Command(Command::Hover { duration: 5.0 })],
                     },
@@ -573,6 +616,7 @@ mod tests {
                     operator: Operator::GreaterThan,
                     threshold_ms: 3.5,
                 },
+                duration_s: None,
                 body: Sequence {
                     statements: vec![Statement::Command(Command::Hover { duration: 10.0 })],
                 },
@@ -602,6 +646,7 @@ mod tests {
                         operator: Operator::LessThan,
                         threshold_percent: 1.0,
                     },
+                    duration_s: None,
                     body: Sequence {
                         statements: vec![Statement::Command(Command::ReturnHome)],
                     },
@@ -616,6 +661,62 @@ mod tests {
             .iter()
             .any(|s| s.description.contains("[TRIGGER] FIRED"));
         assert!(!fired, "trigger should not have fired");
+    }
+
+    #[test]
+    fn temporal_trigger_fires_only_after_duration_elapses() {
+        // Battery drains below 99% after the first long waypoint (~2% drop over ~1km).
+        // With a `for 5s` guard, the trigger should fire once the sim clock
+        // has advanced at least 5 s while the battery is below 99%.
+        // The waypoint leg is ~1km → 100s of simulated time, so the trigger fires.
+        let m = simple_mission(
+            None,
+            vec![
+                Statement::OnCondition {
+                    condition: TriggerCondition::Battery {
+                        operator: Operator::LessThan,
+                        threshold_percent: 99.0,
+                    },
+                    duration_s: Some(5.0),
+                    body: Sequence {
+                        statements: vec![Statement::Command(Command::Hover { duration: 5.0 })],
+                    },
+                },
+                Statement::Command(Command::Takeoff { altitude: 20.0 }),
+                Statement::Command(Command::Waypoint { lat: 0.009, lon: 0.0, alt: 20.0 }),
+                Statement::Command(Command::Land),
+            ],
+        );
+        let report = Runtime::new().execute(&m).unwrap();
+        let fired = report.steps.iter().any(|s| s.description.contains("[TRIGGER] FIRED"));
+        assert!(fired, "temporal trigger should fire after duration elapsed");
+    }
+
+    #[test]
+    fn temporal_trigger_does_not_fire_if_condition_clears_before_duration() {
+        // Wind spikes briefly (1 waypoint = wind increases) but a `for 999s` guard
+        // means it should never fire — the mission ends before the clock reaches 999s.
+        let m = simple_mission(
+            None,
+            vec![
+                Statement::OnCondition {
+                    condition: TriggerCondition::Wind {
+                        operator: Operator::GreaterThan,
+                        threshold_ms: 3.5,
+                    },
+                    duration_s: Some(999.0),
+                    body: Sequence {
+                        statements: vec![Statement::Command(Command::Hover { duration: 1.0 })],
+                    },
+                },
+                Statement::Command(Command::Takeoff { altitude: 30.0 }),
+                Statement::Command(Command::Waypoint { lat: 0.001, lon: 0.0, alt: 30.0 }),
+                Statement::Command(Command::Land),
+            ],
+        );
+        let report = Runtime::new().execute(&m).unwrap();
+        let fired = report.steps.iter().any(|s| s.description.contains("[TRIGGER] FIRED"));
+        assert!(!fired, "trigger with 999s guard should not fire in a short mission");
     }
 
     #[test]

@@ -155,6 +155,10 @@ struct ActiveTrigger {
     condition: TriggerCondition,
     /// Flattened list of commands to execute when the condition fires.
     commands: Vec<Command>,
+    /// If Some(d), condition must be continuously true for d seconds before firing.
+    duration_s: Option<f64>,
+    /// Wall-clock instant when the condition first became true in the current run.
+    condition_true_since: Option<std::time::Instant>,
     /// Rising-edge latch: true while condition is currently satisfied.
     fired: bool,
 }
@@ -508,13 +512,40 @@ fn fire_triggers<C: MavConnection<MavMessage>>(
     triggers: &mut Vec<ActiveTrigger>,
     steps: &mut Vec<crate::runtime::ExecutionStep>,
 ) -> Result<bool, VosaError> {
+    let now = std::time::Instant::now();
+
     for trigger in triggers.iter_mut() {
         let condition_met = eval_trigger(&trigger.condition, telemetry);
 
-        if condition_met && !trigger.fired {
+        if !condition_met {
+            trigger.fired = false;
+            trigger.condition_true_since = None;
+            continue;
+        }
+
+        if trigger.fired {
+            continue;
+        }
+
+        let should_fire = match trigger.duration_s {
+            None => {
+                // Fire immediately on rising edge
+                trigger.condition_true_since.get_or_insert(now);
+                trigger.condition_true_since.is_some()
+            }
+            Some(required_s) => {
+                let since = trigger.condition_true_since.get_or_insert(now);
+                since.elapsed().as_secs_f64() >= required_s
+            }
+        };
+
+        if should_fire {
             trigger.fired = true;
             let label = trigger_label(&trigger.condition);
-            println!("[MAVLink] TRIGGER FIRED: on {label}  batt={:.1}%  wind={:.1}m/s",
+            let dur_desc = trigger.duration_s
+                .map(|d| format!(" (held {d}s)"))
+                .unwrap_or_default();
+            println!("[MAVLink] TRIGGER FIRED: on {label}{dur_desc}  batt={:.1}%  wind={:.1}m/s",
                 telemetry.battery_percent, telemetry.wind_speed_ms);
             steps.push(crate::runtime::ExecutionStep {
                 index: steps.len(),
@@ -545,10 +576,8 @@ fn fire_triggers<C: MavConnection<MavMessage>>(
                 }
             }
             if aborted {
-                return Ok(true); // signal clean exit to monitor loop
+                return Ok(true);
             }
-        } else if !condition_met {
-            trigger.fired = false;
         }
     }
     Ok(false)
@@ -797,21 +826,19 @@ fn collect_triggers(stmts: &[Statement]) -> Vec<ActiveTrigger> {
     stmts
         .iter()
         .filter_map(|stmt| {
-            if let Statement::OnCondition { condition, body } = stmt {
+            if let Statement::OnCondition { condition, duration_s, body } = stmt {
                 let commands: Vec<Command> = body
                     .statements
                     .iter()
                     .filter_map(|s| {
-                        if let Statement::Command(cmd) = s {
-                            Some(cmd.clone())
-                        } else {
-                            None
-                        }
+                        if let Statement::Command(cmd) = s { Some(cmd.clone()) } else { None }
                     })
                     .collect();
                 Some(ActiveTrigger {
                     condition: condition.clone(),
                     commands,
+                    duration_s: *duration_s,
+                    condition_true_since: None,
                     fired: false,
                 })
             } else {
