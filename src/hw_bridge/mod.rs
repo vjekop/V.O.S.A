@@ -45,6 +45,10 @@ struct TelemetryState {
     gps_fix_type: u8,
     /// Home position received from autopilot
     home_set: bool,
+    /// Home latitude in degrees
+    home_lat: f64,
+    /// Home longitude in degrees
+    home_lon: f64,
 }
 
 impl TelemetryState {
@@ -60,11 +64,11 @@ impl TelemetryState {
                 self.gps_fix_type = d.fix_type as u8;
             }
             MavMessage::HOME_POSITION(d) => {
+                self.home_lat = d.latitude as f64 / 1e7;
+                self.home_lon = d.longitude as f64 / 1e7;
                 if !self.home_set {
-                    // lat/lon are in degE7 (degrees × 1e7)
                     println!("[MAVLink] Home GPS: lat={:.7}, lon={:.7}, alt={:.1}m",
-                        d.latitude as f64 / 1e7,
-                        d.longitude as f64 / 1e7,
+                        self.home_lat, self.home_lon,
                         d.altitude as f64 / 1000.0);
                 }
                 self.home_set = true;
@@ -218,8 +222,10 @@ impl MavlinkBridge {
         // ── 5. Build and upload mission ───────────────────────────────────────
         let mut items: Vec<MavItem> = Vec::new();
         collect_items(&mission.sequence.statements, &mut items);
+        let home_lat = telemetry.home_lat;
+        let home_lon = telemetry.home_lon;
         println!("[MAVLink] Uploading {} mission items ...", items.len());
-        upload_mission(&vehicle, &mut telemetry, &items)?;
+        upload_mission(&vehicle, &mut telemetry, &items, home_lat, home_lon)?;
         println!("[MAVLink] Mission upload complete");
 
         // ── 6. Wait for EKF2 + arming checks to clear, then arm ─────────────
@@ -551,6 +557,8 @@ fn upload_mission<C: MavConnection<MavMessage>>(
     vehicle: &C,
     telemetry: &mut TelemetryState,
     items: &[MavItem],
+    home_lat: f64,
+    home_lon: f64,
 ) -> Result<(), VosaError> {
     vehicle
         .send_default(&MavMessage::MISSION_COUNT(common::MISSION_COUNT_DATA {
@@ -578,7 +586,7 @@ fn upload_mission<C: MavConnection<MavMessage>>(
                         }
                         println!("[MAVLink]   Item {}/{}", seq + 1, items.len());
                         vehicle
-                            .send_default(&items[seq].to_mission_item_int(seq as u16))
+                            .send_default(&items[seq].to_mission_item_int(seq as u16, home_lat, home_lon))
                             .map_err(|e| {
                                 VosaError::RuntimeError(format!(
                                     "MISSION_ITEM_INT[{seq}] failed: {e}"
@@ -698,13 +706,16 @@ enum MavItem {
 }
 
 impl MavItem {
-    fn to_mission_item_int(&self, seq: u16) -> MavMessage {
+    fn to_mission_item_int(&self, seq: u16, home_lat: f64, home_lon: f64) -> MavMessage {
         let current = if seq == 0 { 1 } else { 0 };
 
         let (command, x, y, z, p1, p2, p3, p4, frame) = match self {
             MavItem::Takeoff { altitude } => (
                 common::MavCmd::MAV_CMD_NAV_TAKEOFF,
-                0, 0, *altitude,
+                // Use actual home coords so feasibility checker doesn't flag (0,0)
+                (home_lat * 1e7) as i32,
+                (home_lon * 1e7) as i32,
+                *altitude,
                 0.0, 0.0, 0.0, f32::NAN,
                 common::MavFrame::MAV_FRAME_GLOBAL_RELATIVE_ALT,
             ),
