@@ -1,0 +1,104 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v[0-9]+.[0-9]+.[0-9]+'
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Build (${{ matrix.target }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            artifact: vosa-linux-x86_64
+            binary: vosa
+          - os: macos-latest
+            target: aarch64-apple-darwin
+            artifact: vosa-macos-arm64
+            binary: vosa
+          - os: macos-latest
+            target: x86_64-apple-darwin
+            artifact: vosa-macos-x86_64
+            binary: vosa
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            artifact: vosa-windows-x86_64
+            binary: vosa.exe
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Cache cargo registry
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-${{ matrix.target }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Build release binary
+        run: cargo build --release --target ${{ matrix.target }}
+
+      - name: Rename binary
+        shell: bash
+        run: |
+          mkdir -p dist
+          cp target/${{ matrix.target }}/release/${{ matrix.binary }} dist/${{ matrix.artifact }}${{ matrix.os == 'windows-latest' && '.exe' || '' }}
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact }}
+          path: dist/
+
+  release:
+    name: Create GitHub Release
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: dist/
+          merge-multiple: true
+
+      - name: Create release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*
+          generate_release_notes: true
+          body: |
+            ## Install
+
+            Download the binary for your platform below and add it to your `PATH`.
+
+            **Linux / macOS:**
+            ```bash
+            chmod +x vosa-*
+            ./vosa-* run examples/hello_world.vosa
+            ```
+
+            **Windows:**
+            ```powershell
+            .\vosa-windows-x86_64.exe run examples\hello_world.vosa
+            ```
+
+            Or build from source:
+            ```bash
+            cargo install --git https://github.com/vjekop/V.O.S.A.git
+            ```
