@@ -9,36 +9,98 @@ pub use ros2::Ros2Bridge;
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 
-/// MAVLink system ID of the target autopilot (PX4/ArduPilot default)
 const TARGET_SYSTEM: u8 = 1;
-/// MAVLink component ID of the autopilot
 const TARGET_COMPONENT: u8 = 1;
-/// Max messages to sift through while waiting for a specific response.
-/// At ~100 Hz MAVLink throughput this is ~1 second of tolerance.
-const MAX_RECV_ATTEMPTS: usize = 100;
+
+/// Messages to scan while waiting for a specific response (~1 s at 100 Hz).
+const WAIT_ATTEMPTS: usize = 100;
+/// Extended wait for GPS lock (up to ~30 s at 100 Hz).
+const GPS_WAIT_ATTEMPTS: usize = 3000;
+
+// PX4 custom mode values for MAV_CMD_DO_SET_MODE
+const PX4_CUSTOM_MAIN_MODE_AUTO: f32 = 4.0;
+const PX4_CUSTOM_SUB_MODE_AUTO_MISSION: f32 = 4.0;
+const PX4_CUSTOM_SUB_MODE_AUTO_RTL: f32 = 5.0;
+const PX4_CUSTOM_SUB_MODE_AUTO_LAND: f32 = 6.0;
+
+// ── Telemetry state ───────────────────────────────────────────────────────────
+
+/// Live vehicle state updated from MAVLink telemetry messages.
+/// This is what drives the reactive trigger system on real hardware —
+/// conditions are evaluated against actual sensor readings, not simulated values.
+#[derive(Debug, Clone, Default)]
+struct TelemetryState {
+    /// Battery remaining (%), -1 if unknown
+    battery_percent: f64,
+    /// Wind speed magnitude (m/s), derived from WIND_COV
+    wind_speed_ms: f64,
+    /// Obstacle detected (populated from OBSTACLE_DISTANCE or companion computer)
+    obstacle_detected: bool,
+    /// GPS fix type: 0=none, 2=2D, 3=3D, 4=DGPS, 5=RTK float, 6=RTK fixed
+    gps_fix_type: u8,
+    /// Home position received from autopilot
+    home_set: bool,
+}
+
+impl TelemetryState {
+    /// Update fields from an incoming MAVLink message.
+    fn update(&mut self, msg: &MavMessage) {
+        match msg {
+            MavMessage::SYS_STATUS(d) => {
+                if d.battery_remaining >= 0 {
+                    self.battery_percent = d.battery_remaining as f64;
+                }
+            }
+            MavMessage::GPS_RAW_INT(d) => {
+                self.gps_fix_type = d.fix_type as u8;
+            }
+            MavMessage::HOME_POSITION(_) => {
+                self.home_set = true;
+            }
+            MavMessage::WIND_COV(d) => {
+                self.wind_speed_ms =
+                    ((d.wind_x as f64).powi(2) + (d.wind_y as f64).powi(2)).sqrt();
+            }
+            _ => {}
+        }
+    }
+}
+
+// ── Active trigger (MAVLink context) ─────────────────────────────────────────
+
+/// A registered `on` trigger evaluated against live telemetry.
+struct ActiveTrigger {
+    condition: TriggerCondition,
+    /// Flattened list of commands to execute when the condition fires.
+    commands: Vec<Command>,
+    /// Rising-edge latch: true while condition is currently satisfied.
+    fired: bool,
+}
 
 // ── Bridge ────────────────────────────────────────────────────────────────────
 
-/// Translates a VOSA mission into real MAVLink packets and uploads it to an
-/// autopilot (PX4 SITL, ArduPilot SITL, or physical hardware).
+/// Translates a VOSA mission into real MAVLink packets for PX4 / ArduPilot.
 ///
-/// ## Gazebo + PX4 SITL usage
+/// ## Gazebo + PX4 SITL quick-start
 /// ```bash
-/// # In one terminal: start PX4 SITL with Gazebo
-/// make px4_sitl gazebo
+/// # Terminal 1 — PX4 SITL inside Gazebo
+/// cd PX4-Autopilot && make px4_sitl gazebo
 ///
-/// # In another: run your VOSA mission
+/// # Terminal 2 — run the VOSA mission
 /// vosa run mission.vosa --mavlink udpin:0.0.0.0:14550
 /// ```
 ///
-/// ## Protocol
-/// 1. Open TCP/UDP connection to the autopilot
-/// 2. Send a GCS `HEARTBEAT` to identify ourselves
-/// 3. Wait for the vehicle's `HEARTBEAT` to confirm link
-/// 4. Upload the mission via the MAVLink mission protocol:
-///    `MISSION_COUNT` → (per-item) `MISSION_REQUEST_INT` ↔ `MISSION_ITEM_INT` → `MISSION_ACK`
-/// 5. Arm the vehicle via `MAV_CMD_COMPONENT_ARM_DISARM`
-/// 6. Start the mission via `MAV_CMD_MISSION_START`
+/// ## Execution sequence
+/// 1. Connect to autopilot
+/// 2. GCS heartbeat handshake
+/// 3. Wait for 3D GPS lock
+/// 4. Wait for home position
+/// 5. Switch to AUTO.MISSION mode
+/// 6. Upload mission items via MAVLink mission protocol
+/// 7. Arm vehicle
+/// 8. Start mission
+/// 9. Monitor live telemetry — evaluate reactive triggers and send
+///    MAVLink override commands when conditions fire
 pub struct MavlinkBridge {
     connection_string: String,
 }
@@ -52,63 +114,132 @@ impl MavlinkBridge {
 
     pub fn execute(&mut self, mission: &Mission) -> Result<ExecutionReport, VosaError> {
         println!("[MAVLink] Connecting to {} ...", self.connection_string);
-
         let vehicle = mavlink::connect::<MavMessage>(&self.connection_string)
-            .map_err(|e| VosaError::RuntimeError(format!("MAVLink connection failed: {e}")))?;
+            .map_err(|e| VosaError::RuntimeError(format!("Connection failed: {e}")))?;
 
-        // ── Step 1: Announce ourselves as a GCS ──────────────────────────────
+        // ── 1. Heartbeat handshake ────────────────────────────────────────────
         println!("[MAVLink] Sending GCS heartbeat");
         vehicle
             .send_default(&gcs_heartbeat())
             .map_err(|e| VosaError::RuntimeError(format!("Heartbeat send failed: {e}")))?;
 
-        // ── Step 2: Wait for vehicle heartbeat (confirms link is live) ───────
         println!("[MAVLink] Waiting for vehicle heartbeat ...");
-        wait_for_heartbeat(&vehicle)?;
+        let mut telemetry = TelemetryState::default();
+        recv_until(&vehicle, &mut telemetry, WAIT_ATTEMPTS, |msg| {
+            matches!(msg, MavMessage::HEARTBEAT(_))
+        })?;
         println!("[MAVLink] Vehicle link established");
 
-        // ── Step 3: Flatten the VOSA AST into ordered MAVLink mission items ──
+        // ── 2. Wait for 3D GPS lock ───────────────────────────────────────────
+        println!("[MAVLink] Waiting for 3D GPS lock ...");
+        recv_until(&vehicle, &mut telemetry, GPS_WAIT_ATTEMPTS, |_| {
+            false // keep going; GPS state updated via telemetry.update() inside recv_until
+        })
+        .or_else(|_| Ok::<_, VosaError>(()))?; // timeout is OK here; check below
+
+        // Poll with logging until fix
+        for attempt in 0..GPS_WAIT_ATTEMPTS {
+            if telemetry.gps_fix_type >= 3 {
+                println!("[MAVLink] GPS lock acquired (fix_type={})", telemetry.gps_fix_type);
+                break;
+            }
+            if attempt % 100 == 0 {
+                println!(
+                    "[MAVLink] Waiting for GPS ... fix_type={} (need 3)",
+                    telemetry.gps_fix_type
+                );
+            }
+            match vehicle.recv() {
+                Ok((_, msg)) => telemetry.update(&msg),
+                Err(e) => {
+                    return Err(VosaError::RuntimeError(format!("GPS wait error: {e}")))
+                }
+            }
+        }
+        if telemetry.gps_fix_type < 3 {
+            return Err(VosaError::RuntimeError(
+                "Timed out waiting for GPS lock — check antenna / simulator position".into(),
+            ));
+        }
+
+        // ── 3. Wait for home position ─────────────────────────────────────────
+        println!("[MAVLink] Waiting for home position ...");
+        for _ in 0..WAIT_ATTEMPTS {
+            if telemetry.home_set {
+                break;
+            }
+            match vehicle.recv() {
+                Ok((_, msg)) => telemetry.update(&msg),
+                Err(e) => {
+                    return Err(VosaError::RuntimeError(format!("Home wait error: {e}")))
+                }
+            }
+        }
+        if !telemetry.home_set {
+            println!("[MAVLink] Warning: home position not confirmed — continuing anyway");
+        } else {
+            println!("[MAVLink] Home position set");
+        }
+
+        // ── 4. Set AUTO.MISSION mode ──────────────────────────────────────────
+        println!("[MAVLink] Setting AUTO.MISSION mode ...");
+        set_flight_mode(
+            &vehicle,
+            PX4_CUSTOM_MAIN_MODE_AUTO,
+            PX4_CUSTOM_SUB_MODE_AUTO_MISSION,
+        )?;
+        wait_for_command_ack(&vehicle, &mut telemetry, common::MavCmd::MAV_CMD_DO_SET_MODE)?;
+        println!("[MAVLink] Mode: AUTO.MISSION");
+
+        // ── 5. Build and upload mission ───────────────────────────────────────
         let mut items: Vec<MavItem> = Vec::new();
         collect_items(&mission.sequence.statements, &mut items);
-        println!("[MAVLink] Mission has {} items", items.len());
-
-        // ── Step 4: Upload mission via MAVLink mission protocol ───────────────
-        upload_mission(&vehicle, &items)?;
+        println!("[MAVLink] Uploading {} mission items ...", items.len());
+        upload_mission(&vehicle, &mut telemetry, &items)?;
         println!("[MAVLink] Mission upload complete");
 
-        // ── Step 5: Arm ───────────────────────────────────────────────────────
-        println!("[MAVLink] Arming vehicle ...");
+        // ── 6. Arm ────────────────────────────────────────────────────────────
+        println!("[MAVLink] Arming ...");
         send_command_long(
             &vehicle,
             common::MavCmd::MAV_CMD_COMPONENT_ARM_DISARM,
             [1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
         )?;
-        wait_for_command_ack(&vehicle, common::MavCmd::MAV_CMD_COMPONENT_ARM_DISARM)?;
-        println!("[MAVLink] Vehicle armed");
+        wait_for_command_ack(
+            &vehicle,
+            &mut telemetry,
+            common::MavCmd::MAV_CMD_COMPONENT_ARM_DISARM,
+        )?;
+        println!("[MAVLink] Armed");
 
-        // ── Step 6: Start mission ─────────────────────────────────────────────
+        // ── 7. Start mission ──────────────────────────────────────────────────
         println!("[MAVLink] Starting mission ...");
         send_command_long(
             &vehicle,
             common::MavCmd::MAV_CMD_MISSION_START,
             [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
         )?;
-        println!("[MAVLink] Mission running on vehicle");
+        println!("[MAVLink] Mission running — monitoring telemetry");
 
-        // ── Build execution report from the items we uploaded ─────────────────
-        let steps = items
+        // ── 8. Monitor telemetry + evaluate reactive triggers ─────────────────
+        let mut triggers = collect_triggers(&mission.sequence.statements);
+        let item_count = items.len();
+        let mut steps = items
             .iter()
             .enumerate()
-            .map(|(i, item)| crate::runtime::ExecutionStep {
+            .map(|(i, it)| crate::runtime::ExecutionStep {
                 index: i,
-                description: item.describe(),
+                description: it.describe(),
             })
-            .collect();
+            .collect::<Vec<_>>();
 
+        monitor_mission(&vehicle, &mut telemetry, &mut triggers, item_count, &mut steps)?;
+
+        println!("[MAVLink] Mission complete");
         Ok(ExecutionReport {
             mission_name: mission.name.clone(),
             steps,
-            total_distance_m: 0.0, // live telemetry required for real tracking
+            total_distance_m: 0.0,
             max_altitude_m: items
                 .iter()
                 .filter_map(|it| it.altitude())
@@ -117,9 +248,181 @@ impl MavlinkBridge {
     }
 }
 
-// ── MAVLink message helpers ───────────────────────────────────────────────────
+// ── Telemetry helpers ─────────────────────────────────────────────────────────
 
-/// GCS identification heartbeat — sent once at startup to announce ourselves.
+/// Receive messages, updating telemetry state from each, until `done` returns
+/// true or `max` attempts are exhausted.
+fn recv_until<C, F>(
+    vehicle: &C,
+    telemetry: &mut TelemetryState,
+    max: usize,
+    mut done: F,
+) -> Result<(), VosaError>
+where
+    C: MavConnection<MavMessage>,
+    F: FnMut(&MavMessage) -> bool,
+{
+    for _ in 0..max {
+        match vehicle.recv() {
+            Ok((_, msg)) => {
+                telemetry.update(&msg);
+                if done(&msg) {
+                    return Ok(());
+                }
+            }
+            Err(e) => {
+                return Err(VosaError::RuntimeError(format!("MAVLink recv error: {e}")))
+            }
+        }
+    }
+    Err(VosaError::RuntimeError("recv_until: max attempts exhausted".into()))
+}
+
+// ── Mission monitoring + reactive triggers ────────────────────────────────────
+
+/// Run after mission start. Receives all MAVLink messages, keeps telemetry
+/// fresh, evaluates reactive triggers on every update, and fires trigger
+/// commands when conditions transition false → true.
+///
+/// Returns when `MISSION_ITEM_REACHED` for the last item is received.
+fn monitor_mission<C: MavConnection<MavMessage>>(
+    vehicle: &C,
+    telemetry: &mut TelemetryState,
+    triggers: &mut Vec<ActiveTrigger>,
+    item_count: usize,
+    steps: &mut Vec<crate::runtime::ExecutionStep>,
+) -> Result<(), VosaError> {
+    loop {
+        match vehicle.recv() {
+            Ok((_, msg)) => {
+                telemetry.update(&msg);
+
+                // Log waypoint progress
+                if let MavMessage::MISSION_ITEM_REACHED(data) = &msg {
+                    let desc = format!(
+                        "[REACHED] Mission item {}/{}",
+                        data.seq + 1,
+                        item_count
+                    );
+                    println!("[MAVLink] {desc}  batt={:.1}%  wind={:.1}m/s",
+                        telemetry.battery_percent, telemetry.wind_speed_ms);
+                    steps.push(crate::runtime::ExecutionStep {
+                        index: steps.len(),
+                        description: desc,
+                    });
+
+                    // Check if this was the last item
+                    if data.seq as usize >= item_count.saturating_sub(1) {
+                        return Ok(());
+                    }
+                }
+
+                // Evaluate reactive triggers after every telemetry update
+                fire_triggers(vehicle, telemetry, triggers, steps)?;
+            }
+            Err(e) => {
+                return Err(VosaError::RuntimeError(format!(
+                    "Telemetry error during mission: {e}"
+                )))
+            }
+        }
+    }
+}
+
+/// Evaluate all registered triggers against current telemetry.
+/// Fires on rising edge (false → true); resets when condition clears.
+fn fire_triggers<C: MavConnection<MavMessage>>(
+    vehicle: &C,
+    telemetry: &TelemetryState,
+    triggers: &mut Vec<ActiveTrigger>,
+    steps: &mut Vec<crate::runtime::ExecutionStep>,
+) -> Result<(), VosaError> {
+    for trigger in triggers.iter_mut() {
+        let condition_met = eval_trigger(&trigger.condition, telemetry);
+
+        if condition_met && !trigger.fired {
+            trigger.fired = true;
+            let label = trigger_label(&trigger.condition);
+            println!("[MAVLink] TRIGGER FIRED: on {label}  batt={:.1}%  wind={:.1}m/s",
+                telemetry.battery_percent, telemetry.wind_speed_ms);
+            steps.push(crate::runtime::ExecutionStep {
+                index: steps.len(),
+                description: format!("[TRIGGER FIRED] on {label}"),
+            });
+
+            // Execute each command in the trigger body
+            for cmd in &trigger.commands.clone() {
+                execute_trigger_command(vehicle, cmd, steps)?;
+            }
+        } else if !condition_met {
+            trigger.fired = false;
+        }
+    }
+    Ok(())
+}
+
+/// Evaluate a trigger condition against live telemetry.
+fn eval_trigger(condition: &TriggerCondition, t: &TelemetryState) -> bool {
+    match condition {
+        TriggerCondition::Battery { operator, threshold_percent } => match operator {
+            Operator::LessThan    => t.battery_percent < *threshold_percent,
+            Operator::GreaterThan => t.battery_percent > *threshold_percent,
+        },
+        TriggerCondition::Wind { operator, threshold_ms } => match operator {
+            Operator::LessThan    => t.wind_speed_ms < *threshold_ms,
+            Operator::GreaterThan => t.wind_speed_ms > *threshold_ms,
+        },
+        TriggerCondition::ObstacleDetected => t.obstacle_detected,
+    }
+}
+
+/// Send the MAVLink command corresponding to a VOSA trigger body command.
+fn execute_trigger_command<C: MavConnection<MavMessage>>(
+    vehicle: &C,
+    cmd: &Command,
+    steps: &mut Vec<crate::runtime::ExecutionStep>,
+) -> Result<(), VosaError> {
+    let desc = match cmd {
+        Command::ReturnHome => {
+            // Switch to AUTO.RTL mode
+            set_flight_mode(vehicle, PX4_CUSTOM_MAIN_MODE_AUTO, PX4_CUSTOM_SUB_MODE_AUTO_RTL)?;
+            "[TRIGGER CMD] MAV_CMD_DO_SET_MODE AUTO.RTL".to_string()
+        }
+        Command::Land => {
+            // Switch to AUTO.LAND mode
+            set_flight_mode(vehicle, PX4_CUSTOM_MAIN_MODE_AUTO, PX4_CUSTOM_SUB_MODE_AUTO_LAND)?;
+            "[TRIGGER CMD] MAV_CMD_DO_SET_MODE AUTO.LAND".to_string()
+        }
+        Command::Hover { duration } => {
+            send_command_long(
+                vehicle,
+                common::MavCmd::MAV_CMD_NAV_LOITER_TIME,
+                [*duration as f32, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+            )?;
+            format!("[TRIGGER CMD] MAV_CMD_NAV_LOITER_TIME {duration}s")
+        }
+        Command::Takeoff { altitude } => {
+            send_command_long(
+                vehicle,
+                common::MavCmd::MAV_CMD_NAV_TAKEOFF,
+                [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, *altitude as f32],
+            )?;
+            format!("[TRIGGER CMD] MAV_CMD_NAV_TAKEOFF {altitude}m")
+        }
+        other => {
+            format!("[TRIGGER CMD] (skipped in MAVLink context: {other:?})")
+        }
+    };
+    println!("[MAVLink] {desc}");
+    steps.push(crate::runtime::ExecutionStep {
+        index: steps.len(),
+        description: desc,
+    });
+    Ok(())
+}
+
+// ── MAVLink protocol helpers ──────────────────────────────────────────────────
+
 fn gcs_heartbeat() -> MavMessage {
     MavMessage::HEARTBEAT(common::HEARTBEAT_DATA {
         custom_mode: 0,
@@ -131,97 +434,26 @@ fn gcs_heartbeat() -> MavMessage {
     })
 }
 
-/// Block until we receive a HEARTBEAT from the vehicle (confirms the link).
-fn wait_for_heartbeat<C: MavConnection<MavMessage>>(vehicle: &C) -> Result<(), VosaError> {
-    for _ in 0..MAX_RECV_ATTEMPTS {
-        match vehicle.recv() {
-            Ok((_, MavMessage::HEARTBEAT(_))) => return Ok(()),
-            Ok(_) => continue,
-            Err(e) => {
-                return Err(VosaError::RuntimeError(format!(
-                    "Error waiting for vehicle heartbeat: {e}"
-                )))
-            }
-        }
-    }
-    Err(VosaError::RuntimeError(
-        "Timed out waiting for vehicle heartbeat — is the autopilot running?".into(),
-    ))
-}
-
-/// Upload the full mission using the MAVLink mission protocol.
-///
-/// Protocol flow:
-/// 1. GCS sends `MISSION_COUNT`
-/// 2. Vehicle responds with `MISSION_REQUEST_INT` for each item (may be out of order)
-/// 3. GCS responds to each request with the corresponding `MISSION_ITEM_INT`
-/// 4. Vehicle sends `MISSION_ACK` when all items are received
-fn upload_mission<C: MavConnection<MavMessage>>(
+/// Send MAV_CMD_DO_SET_MODE to switch the vehicle flight mode.
+/// PX4 interprets param1 as MAV_MODE_FLAG_CUSTOM_MODE_ENABLED (1),
+/// param2 as the main mode, and param3 as the sub mode.
+fn set_flight_mode<C: MavConnection<MavMessage>>(
     vehicle: &C,
-    items: &[MavItem],
+    main_mode: f32,
+    sub_mode: f32,
 ) -> Result<(), VosaError> {
-    // Tell the vehicle how many items are coming
-    vehicle
-        .send_default(&MavMessage::MISSION_COUNT(common::MISSION_COUNT_DATA {
-            count: items.len() as u16,
-            target_system: TARGET_SYSTEM,
-            target_component: TARGET_COMPONENT,
-        }))
-        .map_err(|e| VosaError::RuntimeError(format!("MISSION_COUNT send failed: {e}")))?;
-
-    // Respond to each MISSION_REQUEST_INT from the vehicle
-    let mut acked = false;
-    let mut attempts = items.len() * MAX_RECV_ATTEMPTS + 50;
-
-    while !acked && attempts > 0 {
-        attempts -= 1;
-        match vehicle.recv() {
-            Ok((_, MavMessage::MISSION_REQUEST_INT(req))) => {
-                let seq = req.seq as usize;
-                if seq >= items.len() {
-                    return Err(VosaError::RuntimeError(format!(
-                        "Vehicle requested out-of-range mission item {seq} (have {})",
-                        items.len()
-                    )));
-                }
-                println!("[MAVLink]   Uploading item {}/{}", seq + 1, items.len());
-                vehicle
-                    .send_default(&items[seq].to_mission_item_int(seq as u16))
-                    .map_err(|e| {
-                        VosaError::RuntimeError(format!("MISSION_ITEM_INT[{seq}] send failed: {e}"))
-                    })?;
-            }
-            Ok((_, MavMessage::MISSION_ACK(ack))) => {
-                match ack.mavtype {
-                    common::MavMissionResult::MAV_MISSION_ACCEPTED => {
-                        acked = true;
-                    }
-                    other => {
-                        return Err(VosaError::RuntimeError(format!(
-                            "Vehicle rejected mission upload: {other:?}"
-                        )));
-                    }
-                }
-            }
-            Ok(_) => {} // ignore unrelated messages (telemetry, etc.)
-            Err(e) => {
-                return Err(VosaError::RuntimeError(format!(
-                    "MAVLink receive error during upload: {e}"
-                )))
-            }
-        }
-    }
-
-    if !acked {
-        return Err(VosaError::RuntimeError(
-            "Mission upload timed out — vehicle did not ACK".into(),
-        ));
-    }
-
-    Ok(())
+    send_command_long(
+        vehicle,
+        common::MavCmd::MAV_CMD_DO_SET_MODE,
+        [
+            common::MavModeFlag::MAV_MODE_FLAG_CUSTOM_MODE_ENABLED.bits() as f32,
+            main_mode,
+            sub_mode,
+            0.0, 0.0, 0.0, 0.0,
+        ],
+    )
 }
 
-/// Send a `COMMAND_LONG` to the autopilot.
 fn send_command_long<C: MavConnection<MavMessage>>(
     vehicle: &C,
     command: common::MavCmd,
@@ -245,38 +477,160 @@ fn send_command_long<C: MavConnection<MavMessage>>(
         .map(|_| ())
 }
 
-/// Wait for a `COMMAND_ACK` confirming the given command was accepted.
 fn wait_for_command_ack<C: MavConnection<MavMessage>>(
     vehicle: &C,
+    telemetry: &mut TelemetryState,
     command: common::MavCmd,
 ) -> Result<(), VosaError> {
-    for _ in 0..MAX_RECV_ATTEMPTS {
+    recv_until(vehicle, telemetry, WAIT_ATTEMPTS, |msg| {
+        matches!(msg, MavMessage::COMMAND_ACK(ack) if ack.command == command)
+    })
+    .map_err(|_| {
+        VosaError::RuntimeError(format!("Timed out waiting for COMMAND_ACK ({command:?})"))
+    })?;
+
+    Ok(())
+}
+
+/// Upload the full mission using the MAVLink mission protocol.
+fn upload_mission<C: MavConnection<MavMessage>>(
+    vehicle: &C,
+    telemetry: &mut TelemetryState,
+    items: &[MavItem],
+) -> Result<(), VosaError> {
+    vehicle
+        .send_default(&MavMessage::MISSION_COUNT(common::MISSION_COUNT_DATA {
+            count: items.len() as u16,
+            target_system: TARGET_SYSTEM,
+            target_component: TARGET_COMPONENT,
+        }))
+        .map_err(|e| VosaError::RuntimeError(format!("MISSION_COUNT send failed: {e}")))?;
+
+    let mut acked = false;
+    let mut attempts = items.len() * WAIT_ATTEMPTS + 50;
+
+    while !acked && attempts > 0 {
+        attempts -= 1;
         match vehicle.recv() {
-            Ok((_, MavMessage::COMMAND_ACK(ack))) if ack.command == command => {
-                return match ack.result {
-                    common::MavResult::MAV_RESULT_ACCEPTED => Ok(()),
-                    other => Err(VosaError::RuntimeError(format!(
-                        "Command {command:?} rejected by autopilot: {other:?}"
-                    ))),
-                };
+            Ok((_, msg)) => {
+                telemetry.update(&msg);
+                match msg {
+                    MavMessage::MISSION_REQUEST_INT(req) => {
+                        let seq = req.seq as usize;
+                        if seq >= items.len() {
+                            return Err(VosaError::RuntimeError(format!(
+                                "Vehicle requested out-of-range item {seq}"
+                            )));
+                        }
+                        println!("[MAVLink]   Item {}/{}", seq + 1, items.len());
+                        vehicle
+                            .send_default(&items[seq].to_mission_item_int(seq as u16))
+                            .map_err(|e| {
+                                VosaError::RuntimeError(format!(
+                                    "MISSION_ITEM_INT[{seq}] failed: {e}"
+                                ))
+                            })?;
+                    }
+                    MavMessage::MISSION_ACK(ack) => match ack.mavtype {
+                        common::MavMissionResult::MAV_MISSION_ACCEPTED => acked = true,
+                        other => {
+                            return Err(VosaError::RuntimeError(format!(
+                                "Mission upload rejected: {other:?}"
+                            )))
+                        }
+                    },
+                    _ => {}
+                }
             }
-            Ok(_) => continue,
             Err(e) => {
                 return Err(VosaError::RuntimeError(format!(
-                    "Error waiting for COMMAND_ACK: {e}"
+                    "Upload recv error: {e}"
                 )))
             }
         }
     }
-    Err(VosaError::RuntimeError(format!(
-        "Timed out waiting for COMMAND_ACK for {command:?}"
-    )))
+
+    if !acked {
+        return Err(VosaError::RuntimeError(
+            "Mission upload timed out — no MISSION_ACK received".into(),
+        ));
+    }
+    Ok(())
+}
+
+// ── AST helpers ───────────────────────────────────────────────────────────────
+
+/// Flatten VOSA statements into ordered MAVLink mission items.
+fn collect_items(stmts: &[Statement], items: &mut Vec<MavItem>) {
+    for stmt in stmts {
+        match stmt {
+            Statement::Command(cmd) => {
+                if let Some(item) = command_to_mav_item(cmd) {
+                    items.push(item);
+                }
+            }
+            Statement::Repeat { count, body } => {
+                for _ in 0..*count {
+                    collect_items(&body.statements, items);
+                }
+            }
+            Statement::IfBattery { body, .. } | Statement::Parallel { body } => {
+                collect_items(&body.statements, items);
+            }
+            Statement::OnCondition { condition, .. } => {
+                println!(
+                    "[MAVLink] Note: 'on {condition:?}' → monitored via live telemetry after launch"
+                );
+            }
+        }
+    }
+}
+
+/// Extract `OnCondition` statements into `ActiveTrigger`s for the monitoring loop.
+fn collect_triggers(stmts: &[Statement]) -> Vec<ActiveTrigger> {
+    stmts
+        .iter()
+        .filter_map(|stmt| {
+            if let Statement::OnCondition { condition, body } = stmt {
+                let commands: Vec<Command> = body
+                    .statements
+                    .iter()
+                    .filter_map(|s| {
+                        if let Statement::Command(cmd) = s {
+                            Some(cmd.clone())
+                        } else {
+                            None
+                        }
+                    })
+                    .collect();
+                Some(ActiveTrigger {
+                    condition: condition.clone(),
+                    commands,
+                    fired: false,
+                })
+            } else {
+                None
+            }
+        })
+        .collect()
+}
+
+fn trigger_label(condition: &TriggerCondition) -> String {
+    match condition {
+        TriggerCondition::Battery { operator, threshold_percent } => {
+            let op = if *operator == Operator::LessThan { "<" } else { ">" };
+            format!("battery {op} {threshold_percent}%")
+        }
+        TriggerCondition::Wind { operator, threshold_ms } => {
+            let op = if *operator == Operator::LessThan { "<" } else { ">" };
+            format!("wind {op} {threshold_ms}m/s")
+        }
+        TriggerCondition::ObstacleDetected => "obstacle_detected".into(),
+    }
 }
 
 // ── Mission item representation ───────────────────────────────────────────────
 
-/// An intermediate representation of a single MAVLink mission item.
-/// Built by flattening the VOSA AST before upload.
 #[derive(Debug)]
 enum MavItem {
     Takeoff { altitude: f32 },
@@ -290,9 +644,7 @@ enum MavItem {
 }
 
 impl MavItem {
-    /// Convert to a `MISSION_ITEM_INT` MAVLink message for upload.
     fn to_mission_item_int(&self, seq: u16) -> MavMessage {
-        // Item 0 is marked `current = 1` so the autopilot starts there.
         let current = if seq == 0 { 1 } else { 0 };
 
         let (command, x, y, z, p1, p2, p3, p4, frame) = match self {
@@ -368,18 +720,16 @@ impl MavItem {
 
     fn describe(&self) -> String {
         match self {
-            MavItem::Takeoff { altitude } => format!("MAV_CMD_NAV_TAKEOFF alt={altitude}m"),
+            MavItem::Takeoff { altitude } => format!("NAV_TAKEOFF alt={altitude}m"),
             MavItem::Waypoint { lat, lon, alt } => {
-                format!("MAV_CMD_NAV_WAYPOINT ({lat:.5}°, {lon:.5}°) alt={alt}m")
+                format!("NAV_WAYPOINT ({lat:.5}°, {lon:.5}°) alt={alt}m")
             }
-            MavItem::LoiterTime { duration } => {
-                format!("MAV_CMD_NAV_LOITER_TIME duration={duration}s")
-            }
-            MavItem::Land => "MAV_CMD_NAV_LAND".into(),
-            MavItem::ReturnHome => "MAV_CMD_NAV_RETURN_TO_LAUNCH".into(),
-            MavItem::CameraStartCapture => "MAV_CMD_VIDEO_START_CAPTURE".into(),
-            MavItem::CameraStopCapture => "MAV_CMD_VIDEO_STOP_CAPTURE".into(),
-            MavItem::CameraPhoto => "MAV_CMD_IMAGE_START_CAPTURE".into(),
+            MavItem::LoiterTime { duration } => format!("NAV_LOITER_TIME {duration}s"),
+            MavItem::Land => "NAV_LAND".into(),
+            MavItem::ReturnHome => "NAV_RETURN_TO_LAUNCH".into(),
+            MavItem::CameraStartCapture => "VIDEO_START_CAPTURE".into(),
+            MavItem::CameraStopCapture => "VIDEO_STOP_CAPTURE".into(),
+            MavItem::CameraPhoto => "IMAGE_START_CAPTURE".into(),
         }
     }
 
@@ -392,49 +742,12 @@ impl MavItem {
     }
 }
 
-/// Flatten a VOSA statement list into an ordered list of `MavItem`s.
-///
-/// - `Repeat` blocks are unrolled into repeated items (missions are static plans).
-/// - `IfBattery` bodies are included unconditionally — the flight controller's
-///   own failsafe system handles battery-triggered behaviour.
-/// - `OnCondition` triggers are skipped here; on real hardware they are wired to
-///   the autopilot's event/failsafe system via parameter configuration.
-fn collect_items(stmts: &[Statement], items: &mut Vec<MavItem>) {
-    for stmt in stmts {
-        match stmt {
-            Statement::Command(cmd) => {
-                if let Some(item) = command_to_mav_item(cmd) {
-                    items.push(item);
-                }
-            }
-            Statement::Repeat { count, body } => {
-                for _ in 0..*count {
-                    collect_items(&body.statements, items);
-                }
-            }
-            Statement::IfBattery { body, .. } | Statement::Parallel { body } => {
-                collect_items(&body.statements, items);
-            }
-            Statement::OnCondition { condition, .. } => {
-                // Reactive triggers are not mission items — they map to autopilot
-                // failsafe parameters or companion computer logic. Log and skip.
-                println!(
-                    "[MAVLink] Note: 'on {condition:?}' trigger — configure matching \
-                     failsafe on the autopilot (e.g. PX4 EKF2_BATT_THR / COM_LOW_BAT_ACT)"
-                );
-            }
-        }
-    }
-}
-
 fn command_to_mav_item(cmd: &Command) -> Option<MavItem> {
     Some(match cmd {
         Command::Takeoff { altitude } => MavItem::Takeoff { altitude: *altitude as f32 },
-        Command::Waypoint { lat, lon, alt } => MavItem::Waypoint {
-            lat: *lat,
-            lon: *lon,
-            alt: *alt as f32,
-        },
+        Command::Waypoint { lat, lon, alt } => {
+            MavItem::Waypoint { lat: *lat, lon: *lon, alt: *alt as f32 }
+        }
         Command::Hover { duration } => MavItem::LoiterTime { duration: *duration as f32 },
         Command::Land => MavItem::Land,
         Command::ReturnHome => MavItem::ReturnHome,
