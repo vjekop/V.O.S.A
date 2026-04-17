@@ -68,7 +68,9 @@ impl SafetySandbox {
     fn check_statement(&self, stmt: &Statement, safety: &SafetyBlock) -> Result<(), VosaError> {
         match stmt {
             Statement::Command(cmd) => self.check_command(cmd, safety)?,
-            Statement::OnCondition { duration_s, body, .. } => {
+            Statement::OnCondition {
+                duration_s, body, ..
+            } => {
                 if let Some(d) = duration_s {
                     if *d <= 0.0 {
                         return Err(VosaError::SafetyViolation(
@@ -187,7 +189,6 @@ impl SafetySandbox {
                     self.check_geofence_stmt(inner, clat, clon, radius)?;
                 }
             }
-
         }
         Ok(())
     }
@@ -207,7 +208,11 @@ impl SafetySandbox {
     // This is intentionally conservative. False positives are safer than
     // false negatives when lives or equipment are at stake.
 
-    fn check_battery_range(&self, mission: &Mission, safety: &SafetyBlock) -> Result<(), VosaError> {
+    fn check_battery_range(
+        &self,
+        mission: &Mission,
+        safety: &SafetyBlock,
+    ) -> Result<(), VosaError> {
         let reserve = match safety.battery_reserve {
             Some(r) => r,
             None => return Ok(()),
@@ -229,14 +234,14 @@ impl SafetySandbox {
 
         // Return leg: last waypoint back to first (home approximation)
         let first = waypoints[0];
-        let last  = waypoints[waypoints.len() - 1];
+        let last = waypoints[waypoints.len() - 1];
         let return_m = haversine_m(last.0, last.1, first.0, first.1);
         total_m += return_m;
 
         // 1% per 100 m = 0.01% per metre
         let estimated_pct = total_m * 0.01 / 100.0;
-        let margin_pct    = 20.0; // safety margin on top of reserve
-        let required_pct  = estimated_pct + reserve + margin_pct;
+        let margin_pct = 20.0; // safety margin on top of reserve
+        let required_pct = estimated_pct + reserve + margin_pct;
 
         if required_pct > 100.0 {
             return Err(VosaError::SafetyViolation(format!(
@@ -265,7 +270,9 @@ impl SafetySandbox {
             .statements
             .iter()
             .filter_map(|s| match s {
-                Statement::OnCondition { condition, body, .. } => Some((condition, body)),
+                Statement::OnCondition {
+                    condition, body, ..
+                } => Some((condition, body)),
                 _ => None,
             })
             .collect();
@@ -321,7 +328,9 @@ impl SafetySandbox {
         declared: &HashSet<&str>,
     ) -> Result<(), VosaError> {
         match stmt {
-            Statement::OnCondition { condition, body, .. } => {
+            Statement::OnCondition {
+                condition, body, ..
+            } => {
                 self.check_sensor_refs_condition(condition, declared)?;
                 for inner in &body.statements {
                     self.check_sensor_refs_stmt(inner, declared)?;
@@ -367,20 +376,30 @@ impl SafetySandbox {
 fn is_known_sensor(message: &str, field: &str) -> bool {
     matches!(
         (message, field),
-        ("ATTITUDE", "roll")      | ("ATTITUDE", "pitch")     | ("ATTITUDE", "yaw")
-        | ("ATTITUDE", "rollspeed") | ("ATTITUDE", "pitchspeed") | ("ATTITUDE", "yawspeed")
-        | ("VFR_HUD", "airspeed")   | ("VFR_HUD", "groundspeed") | ("VFR_HUD", "alt")
-        | ("VFR_HUD", "climb")
-        | ("WIND_COV", "wind_x")    | ("WIND_COV", "wind_y")
-        | ("GPS_RAW_INT", "eph")    | ("GPS_RAW_INT", "epv")
-        | ("GPS_RAW_INT", "satellites_visible")
-        | ("SYS_STATUS", "battery_remaining")
-        | ("DISTANCE_SENSOR", "current_distance")
+        ("ATTITUDE", "roll")
+            | ("ATTITUDE", "pitch")
+            | ("ATTITUDE", "yaw")
+            | ("ATTITUDE", "rollspeed")
+            | ("ATTITUDE", "pitchspeed")
+            | ("ATTITUDE", "yawspeed")
+            | ("VFR_HUD", "airspeed")
+            | ("VFR_HUD", "groundspeed")
+            | ("VFR_HUD", "alt")
+            | ("VFR_HUD", "climb")
+            | ("WIND_COV", "wind_x")
+            | ("WIND_COV", "wind_y")
+            | ("GPS_RAW_INT", "eph")
+            | ("GPS_RAW_INT", "epv")
+            | ("GPS_RAW_INT", "satellites_visible")
+            | ("SYS_STATUS", "battery_remaining")
+            | ("DISTANCE_SENSOR", "current_distance")
     )
 }
 
 impl Default for SafetySandbox {
-    fn default() -> Self { Self::new() }
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 // ── Geometry helpers ──────────────────────────────────────────────────────────
@@ -392,8 +411,7 @@ fn haversine_m(lat1: f64, lon1: f64, lat2: f64, lon2: f64) -> f64 {
     let phi2 = lat2.to_radians();
     let dphi = (lat2 - lat1).to_radians();
     let dlam = (lon2 - lon1).to_radians();
-    let a = (dphi / 2.0).sin().powi(2)
-        + phi1.cos() * phi2.cos() * (dlam / 2.0).sin().powi(2);
+    let a = (dphi / 2.0).sin().powi(2) + phi1.cos() * phi2.cos() * (dlam / 2.0).sin().powi(2);
     2.0 * R * a.sqrt().asin()
 }
 
@@ -432,7 +450,7 @@ fn trigger_intent(body: &Sequence) -> TriggerIntent {
         if let Statement::Command(cmd) = stmt {
             match cmd {
                 Command::ReturnHome => return TriggerIntent::ReturnHome,
-                Command::Land       => return TriggerIntent::Land,
+                Command::Land => return TriggerIntent::Land,
                 Command::Hover { .. } => return TriggerIntent::Hover,
                 _ => {}
             }
@@ -447,9 +465,12 @@ fn intents_conflict(a: &TriggerIntent, b: &TriggerIntent) -> bool {
     // Hover vs either abort command is a conflict too.
     matches!(
         (&a, &b),
-        (ReturnHome, Land) | (Land, ReturnHome) |
-        (Hover, ReturnHome) | (ReturnHome, Hover) |
-        (Hover, Land) | (Land, Hover)
+        (ReturnHome, Land)
+            | (Land, ReturnHome)
+            | (Hover, ReturnHome)
+            | (ReturnHome, Hover)
+            | (Hover, Land)
+            | (Land, Hover)
     )
 }
 
@@ -478,7 +499,8 @@ fn conditions_can_overlap(a: &TriggerCondition, b: &TriggerCondition) -> bool {
             TriggerCondition::Wind { operator: op_b, .. },
         ) => matches!(
             (op_a, op_b),
-            (Operator::LessThan, Operator::LessThan) | (Operator::GreaterThan, Operator::GreaterThan)
+            (Operator::LessThan, Operator::LessThan)
+                | (Operator::GreaterThan, Operator::GreaterThan)
         ),
         // Battery and wind are independent — can overlap
         (TriggerCondition::Battery { .. }, TriggerCondition::Wind { .. })
@@ -490,21 +512,47 @@ fn conditions_can_overlap(a: &TriggerCondition, b: &TriggerCondition) -> bool {
 
 fn condition_display(c: &TriggerCondition) -> String {
     match c {
-        TriggerCondition::Battery { operator, threshold_percent } => {
-            let op = if *operator == Operator::LessThan { "<" } else { ">" };
+        TriggerCondition::Battery {
+            operator,
+            threshold_percent,
+        } => {
+            let op = if *operator == Operator::LessThan {
+                "<"
+            } else {
+                ">"
+            };
             format!("battery {op} {threshold_percent}%")
         }
-        TriggerCondition::Wind { operator, threshold_ms } => {
-            let op = if *operator == Operator::LessThan { "<" } else { ">" };
+        TriggerCondition::Wind {
+            operator,
+            threshold_ms,
+        } => {
+            let op = if *operator == Operator::LessThan {
+                "<"
+            } else {
+                ">"
+            };
             format!("wind {op} {threshold_ms}m/s")
         }
         TriggerCondition::ObstacleDetected => "obstacle_detected".into(),
-        TriggerCondition::Custom { name, operator, threshold } => {
-            let op = if *operator == Operator::LessThan { "<" } else { ">" };
+        TriggerCondition::Custom {
+            name,
+            operator,
+            threshold,
+        } => {
+            let op = if *operator == Operator::LessThan {
+                "<"
+            } else {
+                ">"
+            };
             format!("{name} {op} {threshold}")
         }
-        TriggerCondition::And(a, b) => format!("{} and {}", condition_display(a), condition_display(b)),
-        TriggerCondition::Or(a, b)  => format!("{} or {}",  condition_display(a), condition_display(b)),
+        TriggerCondition::And(a, b) => {
+            format!("{} and {}", condition_display(a), condition_display(b))
+        }
+        TriggerCondition::Or(a, b) => {
+            format!("{} or {}", condition_display(a), condition_display(b))
+        }
     }
 }
 
@@ -546,7 +594,10 @@ mod tests {
     #[test]
     fn takeoff_within_max_altitude_passes() {
         let m = mission_with_safety(
-            SafetyBlock { max_altitude: Some(100.0), ..Default::default() },
+            SafetyBlock {
+                max_altitude: Some(100.0),
+                ..Default::default()
+            },
             vec![Statement::Command(Command::Takeoff { altitude: 50.0 })],
         );
         assert!(SafetySandbox::new().validate(&m).is_ok());
@@ -555,7 +606,10 @@ mod tests {
     #[test]
     fn takeoff_exceeds_max_altitude_is_violation() {
         let m = mission_with_safety(
-            SafetyBlock { max_altitude: Some(30.0), ..Default::default() },
+            SafetyBlock {
+                max_altitude: Some(30.0),
+                ..Default::default()
+            },
             vec![Statement::Command(Command::Takeoff { altitude: 50.0 })],
         );
         let err = SafetySandbox::new().validate(&m).unwrap_err();
@@ -566,8 +620,15 @@ mod tests {
     #[test]
     fn waypoint_below_min_altitude_is_violation() {
         let m = mission_with_safety(
-            SafetyBlock { min_altitude: Some(10.0), ..Default::default() },
-            vec![Statement::Command(Command::Waypoint { lat: 0.0, lon: 0.0, alt: 5.0 })],
+            SafetyBlock {
+                min_altitude: Some(10.0),
+                ..Default::default()
+            },
+            vec![Statement::Command(Command::Waypoint {
+                lat: 0.0,
+                lon: 0.0,
+                alt: 5.0,
+            })],
         );
         let err = SafetySandbox::new().validate(&m).unwrap_err();
         assert!(matches!(err, VosaError::SafetyViolation(_)));
@@ -580,14 +641,23 @@ mod tests {
             SafetyBlock::default(),
             vec![Statement::Command(Command::Hover { duration: 0.0 })],
         );
-        assert!(matches!(SafetySandbox::new().validate(&m).unwrap_err(), VosaError::SafetyViolation(_)));
+        assert!(matches!(
+            SafetySandbox::new().validate(&m).unwrap_err(),
+            VosaError::SafetyViolation(_)
+        ));
     }
 
     #[test]
     fn cruise_speed_exceeds_max_speed_is_violation() {
         let m = mission_with_flight_and_safety(
-            SafetyBlock { max_speed: Some(10.0), ..Default::default() },
-            FlightConfig { cruise_speed: Some(20.0), ..Default::default() },
+            SafetyBlock {
+                max_speed: Some(10.0),
+                ..Default::default()
+            },
+            FlightConfig {
+                cruise_speed: Some(20.0),
+                ..Default::default()
+            },
             vec![Statement::Command(Command::Takeoff { altitude: 10.0 })],
         );
         let err = SafetySandbox::new().validate(&m).unwrap_err();
@@ -613,7 +683,10 @@ mod tests {
     #[test]
     fn nested_repeat_violating_safety_fails() {
         let m = mission_with_safety(
-            SafetyBlock { max_altitude: Some(10.0), ..Default::default() },
+            SafetyBlock {
+                max_altitude: Some(10.0),
+                ..Default::default()
+            },
             vec![Statement::Repeat {
                 count: 5,
                 body: Sequence {
@@ -621,7 +694,10 @@ mod tests {
                 },
             }],
         );
-        assert!(matches!(SafetySandbox::new().validate(&m).unwrap_err(), VosaError::SafetyViolation(_)));
+        assert!(matches!(
+            SafetySandbox::new().validate(&m).unwrap_err(),
+            VosaError::SafetyViolation(_)
+        ));
     }
 
     // ── Geofence tests ────────────────────────────────────────────────────────
@@ -631,12 +707,19 @@ mod tests {
         let m = mission_with_safety(
             SafetyBlock {
                 geofence: Some(Geofence::Circle {
-                    center: GeoCenter::Coord { lat: 47.398, lon: 8.546 },
+                    center: GeoCenter::Coord {
+                        lat: 47.398,
+                        lon: 8.546,
+                    },
                     radius: 500.0,
                 }),
                 ..Default::default()
             },
-            vec![Statement::Command(Command::Waypoint { lat: 47.399, lon: 8.546, alt: 30.0 })],
+            vec![Statement::Command(Command::Waypoint {
+                lat: 47.399,
+                lon: 8.546,
+                alt: 30.0,
+            })],
         );
         assert!(SafetySandbox::new().validate(&m).is_ok());
     }
@@ -646,13 +729,20 @@ mod tests {
         let m = mission_with_safety(
             SafetyBlock {
                 geofence: Some(Geofence::Circle {
-                    center: GeoCenter::Coord { lat: 47.398, lon: 8.546 },
+                    center: GeoCenter::Coord {
+                        lat: 47.398,
+                        lon: 8.546,
+                    },
                     radius: 100.0,
                 }),
                 ..Default::default()
             },
             // 5 km away — clearly outside
-            vec![Statement::Command(Command::Waypoint { lat: 47.440, lon: 8.546, alt: 30.0 })],
+            vec![Statement::Command(Command::Waypoint {
+                lat: 47.440,
+                lon: 8.546,
+                alt: 30.0,
+            })],
         );
         let err = SafetySandbox::new().validate(&m).unwrap_err();
         assert!(matches!(err, VosaError::SafetyViolation(_)));
@@ -670,7 +760,11 @@ mod tests {
                 }),
                 ..Default::default()
             },
-            vec![Statement::Command(Command::Waypoint { lat: 99.0, lon: 99.0, alt: 30.0 })],
+            vec![Statement::Command(Command::Waypoint {
+                lat: 99.0,
+                lon: 99.0,
+                alt: 30.0,
+            })],
         );
         assert!(SafetySandbox::new().validate(&m).is_ok());
     }
@@ -681,11 +775,26 @@ mod tests {
     fn short_mission_within_battery_passes() {
         // 5 waypoints ~50 m apart — trivially within range
         let m = mission_with_safety(
-            SafetyBlock { battery_reserve: Some(10.0), ..Default::default() },
+            SafetyBlock {
+                battery_reserve: Some(10.0),
+                ..Default::default()
+            },
             vec![
-                Statement::Command(Command::Waypoint { lat: 47.3980, lon: 8.5462, alt: 30.0 }),
-                Statement::Command(Command::Waypoint { lat: 47.3984, lon: 8.5462, alt: 30.0 }),
-                Statement::Command(Command::Waypoint { lat: 47.3988, lon: 8.5462, alt: 30.0 }),
+                Statement::Command(Command::Waypoint {
+                    lat: 47.3980,
+                    lon: 8.5462,
+                    alt: 30.0,
+                }),
+                Statement::Command(Command::Waypoint {
+                    lat: 47.3984,
+                    lon: 8.5462,
+                    alt: 30.0,
+                }),
+                Statement::Command(Command::Waypoint {
+                    lat: 47.3988,
+                    lon: 8.5462,
+                    alt: 30.0,
+                }),
             ],
         );
         assert!(SafetySandbox::new().validate(&m).is_ok());
@@ -695,11 +804,26 @@ mod tests {
     fn extremely_long_mission_exceeds_battery() {
         // Waypoints 1000 km apart — impossible to complete
         let m = mission_with_safety(
-            SafetyBlock { battery_reserve: Some(10.0), ..Default::default() },
+            SafetyBlock {
+                battery_reserve: Some(10.0),
+                ..Default::default()
+            },
             vec![
-                Statement::Command(Command::Waypoint { lat: 0.0,  lon: 0.0,  alt: 30.0 }),
-                Statement::Command(Command::Waypoint { lat: 10.0, lon: 0.0,  alt: 30.0 }), // ~1111 km
-                Statement::Command(Command::Waypoint { lat: 10.0, lon: 10.0, alt: 30.0 }), // ~1111 km
+                Statement::Command(Command::Waypoint {
+                    lat: 0.0,
+                    lon: 0.0,
+                    alt: 30.0,
+                }),
+                Statement::Command(Command::Waypoint {
+                    lat: 10.0,
+                    lon: 0.0,
+                    alt: 30.0,
+                }), // ~1111 km
+                Statement::Command(Command::Waypoint {
+                    lat: 10.0,
+                    lon: 10.0,
+                    alt: 30.0,
+                }), // ~1111 km
             ],
         );
         let err = SafetySandbox::new().validate(&m).unwrap_err();

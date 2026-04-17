@@ -5,11 +5,11 @@
 //! and low-level machine execution, with safety enforced at the language level.
 
 pub mod error;
+pub mod hw_bridge;
 pub mod lexer;
 pub mod parser;
-pub mod safety;
 pub mod runtime;
-pub mod hw_bridge;
+pub mod safety;
 
 pub use error::VosaError;
 

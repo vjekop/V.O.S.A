@@ -97,7 +97,7 @@ impl Runtime {
     /// no wind escalation) so you can test specific trigger conditions in isolation.
     pub fn with_injection(injected: HashMap<String, f64>) -> Self {
         let battery = injected.get("battery").copied().unwrap_or(100.0);
-        let wind    = injected.get("wind").copied().unwrap_or(3.0);
+        let wind = injected.get("wind").copied().unwrap_or(3.0);
         let obstacle = injected.get("obstacle").map(|v| *v != 0.0).unwrap_or(false);
         Runtime {
             steps: Vec::new(),
@@ -146,7 +146,9 @@ impl Runtime {
                     GeoCenter::Home => "home (0.0, 0.0)".to_string(),
                     GeoCenter::Coord { lat, lon } => format!("({lat:.4}°, {lon:.4}°)"),
                 };
-                self.log(format!("[SAFETY] geofence: {radius}m radius from {center_desc}"));
+                self.log(format!(
+                    "[SAFETY] geofence: {radius}m radius from {center_desc}"
+                ));
             }
         }
 
@@ -201,13 +203,21 @@ impl Runtime {
                     }
                 }
             }
-            Statement::IfBattery { operator, threshold_percent, body } => {
+            Statement::IfBattery {
+                operator,
+                threshold_percent,
+                body,
+            } => {
                 let current_battery = self.battery_percent;
                 let condition_met = match operator {
-                    Operator::LessThan    => current_battery < *threshold_percent,
+                    Operator::LessThan => current_battery < *threshold_percent,
                     Operator::GreaterThan => current_battery > *threshold_percent,
                 };
-                let op_str = if *operator == Operator::LessThan { "<" } else { ">" };
+                let op_str = if *operator == Operator::LessThan {
+                    "<"
+                } else {
+                    ">"
+                };
                 self.log(format!(
                     "[IF BATTERY] {:.1}% {} {}% — condition is {}",
                     current_battery, op_str, threshold_percent, condition_met
@@ -224,7 +234,11 @@ impl Runtime {
                     self.execute_statement(&inner_stmt, safety)?;
                 }
             }
-            Statement::OnCondition { condition, duration_s, body } => {
+            Statement::OnCondition {
+                condition,
+                duration_s,
+                body,
+            } => {
                 let label = condition_label(condition);
                 let dur_desc = match duration_s {
                     Some(d) => format!(" for {d}s"),
@@ -246,16 +260,17 @@ impl Runtime {
     /// Evaluate all registered triggers against current environmental state.
     /// Fires the body of any trigger whose condition just became true (rising edge).
     fn check_triggers(&mut self, safety: Option<&SafetyBlock>) -> Result<(), VosaError> {
-        let battery  = self.battery_percent;
-        let wind     = self.wind_speed_ms;
+        let battery = self.battery_percent;
+        let wind = self.wind_speed_ms;
         let obstacle = self.obstacle_detected;
-        let sensors  = self.sensor_values.clone();
-        let now      = self.sim_time_s;
+        let sensors = self.sensor_values.clone();
+        let now = self.sim_time_s;
 
         let mut to_fire: Vec<usize> = Vec::new();
 
         for (i, trigger) in self.triggers.iter_mut().enumerate() {
-            let condition_met = eval_condition(&trigger.condition, battery, wind, obstacle, &sensors);
+            let condition_met =
+                eval_condition(&trigger.condition, battery, wind, obstacle, &sensors);
 
             if condition_met {
                 if !trigger.fired {
@@ -287,7 +302,8 @@ impl Runtime {
 
         for i in to_fire {
             let label = condition_label(&self.triggers[i].condition);
-            let dur = self.triggers[i].duration_s
+            let dur = self.triggers[i]
+                .duration_s
                 .map(|d| format!(" (held {d}s)"))
                 .unwrap_or_default();
             self.log(format!("[TRIGGER] FIRED: on {label}{dur}"));
@@ -396,11 +412,21 @@ impl Runtime {
     /// Check whether battery has dropped below the declared reserve and, if so,
     /// execute the failsafe action and abort the mission.
     fn check_battery_failsafe(&mut self, safety: Option<&SafetyBlock>) -> Result<(), VosaError> {
-        let safety = match safety { Some(s) => s, None => return Ok(()) };
-        let reserve = match safety.battery_reserve { Some(r) => r, None => return Ok(()) };
+        let safety = match safety {
+            Some(s) => s,
+            None => return Ok(()),
+        };
+        let reserve = match safety.battery_reserve {
+            Some(r) => r,
+            None => return Ok(()),
+        };
 
         if self.battery_percent <= reserve {
-            let action = safety.failsafe.as_ref().cloned().unwrap_or(FailsafeAction::ReturnHome);
+            let action = safety
+                .failsafe
+                .as_ref()
+                .cloned()
+                .unwrap_or(FailsafeAction::ReturnHome);
             self.log(format!(
                 "[FAILSAFE] Battery {:.1}% \u{2264} reserve {reserve}% — executing failsafe: {action:?}",
                 self.battery_percent
@@ -409,7 +435,9 @@ impl Runtime {
                 FailsafeAction::ReturnHome => {
                     let dist = haversine(self.current_lat, self.current_lon, 0.0, 0.0);
                     self.battery_percent -= dist / 500.0;
-                    if self.battery_percent < 0.0 { self.battery_percent = 0.0; }
+                    if self.battery_percent < 0.0 {
+                        self.battery_percent = 0.0;
+                    }
                     self.total_distance += dist;
                     self.log(format!("[FAILSAFE] RTH — {dist:.0}m to home"));
                     self.current_lat = 0.0;
@@ -459,19 +487,29 @@ fn eval_condition(
     sensors: &HashMap<String, f64>,
 ) -> bool {
     match condition {
-        TriggerCondition::Battery { operator, threshold_percent } => match operator {
-            Operator::LessThan    => battery < *threshold_percent,
+        TriggerCondition::Battery {
+            operator,
+            threshold_percent,
+        } => match operator {
+            Operator::LessThan => battery < *threshold_percent,
             Operator::GreaterThan => battery > *threshold_percent,
         },
-        TriggerCondition::Wind { operator, threshold_ms } => match operator {
-            Operator::LessThan    => wind < *threshold_ms,
+        TriggerCondition::Wind {
+            operator,
+            threshold_ms,
+        } => match operator {
+            Operator::LessThan => wind < *threshold_ms,
             Operator::GreaterThan => wind > *threshold_ms,
         },
         TriggerCondition::ObstacleDetected => obstacle,
-        TriggerCondition::Custom { name, operator, threshold } => {
+        TriggerCondition::Custom {
+            name,
+            operator,
+            threshold,
+        } => {
             let value = sensors.get(name).copied().unwrap_or(0.0);
             match operator {
-                Operator::LessThan    => value < *threshold,
+                Operator::LessThan => value < *threshold,
                 Operator::GreaterThan => value > *threshold,
             }
         }
@@ -489,21 +527,43 @@ fn eval_condition(
 /// Human-readable label for a trigger condition (used in log output).
 fn condition_label(condition: &TriggerCondition) -> String {
     match condition {
-        TriggerCondition::Battery { operator, threshold_percent } => {
-            let op = if *operator == Operator::LessThan { "<" } else { ">" };
+        TriggerCondition::Battery {
+            operator,
+            threshold_percent,
+        } => {
+            let op = if *operator == Operator::LessThan {
+                "<"
+            } else {
+                ">"
+            };
             format!("battery {op} {threshold_percent}%")
         }
-        TriggerCondition::Wind { operator, threshold_ms } => {
-            let op = if *operator == Operator::LessThan { "<" } else { ">" };
+        TriggerCondition::Wind {
+            operator,
+            threshold_ms,
+        } => {
+            let op = if *operator == Operator::LessThan {
+                "<"
+            } else {
+                ">"
+            };
             format!("wind {op} {threshold_ms}m/s")
         }
         TriggerCondition::ObstacleDetected => "obstacle_detected".to_string(),
-        TriggerCondition::Custom { name, operator, threshold } => {
-            let op = if *operator == Operator::LessThan { "<" } else { ">" };
+        TriggerCondition::Custom {
+            name,
+            operator,
+            threshold,
+        } => {
+            let op = if *operator == Operator::LessThan {
+                "<"
+            } else {
+                ">"
+            };
             format!("{name} {op} {threshold}")
         }
         TriggerCondition::And(a, b) => format!("{} and {}", condition_label(a), condition_label(b)),
-        TriggerCondition::Or(a, b)  => format!("{} or {}",  condition_label(a), condition_label(b)),
+        TriggerCondition::Or(a, b) => format!("{} or {}", condition_label(a), condition_label(b)),
     }
 }
 
@@ -563,7 +623,11 @@ mod tests {
             }),
             vec![
                 Statement::Command(Command::Takeoff { altitude: 10.0 }),
-                Statement::Command(Command::Waypoint { lat: 0.001, lon: 0.0, alt: 10.0 }),
+                Statement::Command(Command::Waypoint {
+                    lat: 0.001,
+                    lon: 0.0,
+                    alt: 10.0,
+                }),
                 Statement::Command(Command::Land),
             ],
         );
@@ -582,7 +646,11 @@ mod tests {
             }),
             vec![
                 Statement::Command(Command::Takeoff { altitude: 10.0 }),
-                Statement::Command(Command::Waypoint { lat: 0.001, lon: 0.0, alt: 10.0 }),
+                Statement::Command(Command::Waypoint {
+                    lat: 0.001,
+                    lon: 0.0,
+                    alt: 10.0,
+                }),
             ],
         );
         let err = Runtime::new().execute(&m).unwrap_err();
@@ -609,7 +677,11 @@ mod tests {
                 },
                 Statement::Command(Command::Takeoff { altitude: 20.0 }),
                 // ~1km leg drains ~2% battery
-                Statement::Command(Command::Waypoint { lat: 0.009, lon: 0.0, alt: 20.0 }),
+                Statement::Command(Command::Waypoint {
+                    lat: 0.009,
+                    lon: 0.0,
+                    alt: 20.0,
+                }),
                 Statement::Command(Command::Land),
             ],
         );
@@ -619,7 +691,11 @@ mod tests {
             .steps
             .iter()
             .any(|s| s.description.contains("[TRIGGER] FIRED"));
-        assert!(fired, "expected battery trigger to fire, steps: {:#?}", report.steps);
+        assert!(
+            fired,
+            "expected battery trigger to fire, steps: {:#?}",
+            report.steps
+        );
     }
 
     #[test]
@@ -709,12 +785,19 @@ mod tests {
                     },
                 },
                 Statement::Command(Command::Takeoff { altitude: 20.0 }),
-                Statement::Command(Command::Waypoint { lat: 0.009, lon: 0.0, alt: 20.0 }),
+                Statement::Command(Command::Waypoint {
+                    lat: 0.009,
+                    lon: 0.0,
+                    alt: 20.0,
+                }),
                 Statement::Command(Command::Land),
             ],
         );
         let report = Runtime::new().execute(&m).unwrap();
-        let fired = report.steps.iter().any(|s| s.description.contains("[TRIGGER] FIRED"));
+        let fired = report
+            .steps
+            .iter()
+            .any(|s| s.description.contains("[TRIGGER] FIRED"));
         assert!(fired, "temporal trigger should fire after duration elapsed");
     }
 
@@ -736,13 +819,23 @@ mod tests {
                     },
                 },
                 Statement::Command(Command::Takeoff { altitude: 30.0 }),
-                Statement::Command(Command::Waypoint { lat: 0.001, lon: 0.0, alt: 30.0 }),
+                Statement::Command(Command::Waypoint {
+                    lat: 0.001,
+                    lon: 0.0,
+                    alt: 30.0,
+                }),
                 Statement::Command(Command::Land),
             ],
         );
         let report = Runtime::new().execute(&m).unwrap();
-        let fired = report.steps.iter().any(|s| s.description.contains("[TRIGGER] FIRED"));
-        assert!(!fired, "trigger with 999s guard should not fire in a short mission");
+        let fired = report
+            .steps
+            .iter()
+            .any(|s| s.description.contains("[TRIGGER] FIRED"));
+        assert!(
+            !fired,
+            "trigger with 999s guard should not fire in a short mission"
+        );
     }
 
     #[test]

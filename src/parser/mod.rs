@@ -45,11 +45,7 @@ impl Parser {
             self.advance();
             Ok(())
         } else {
-            Err(self.parse_err(format!(
-                "expected {:?}, got {:?}",
-                expected,
-                self.peek()
-            )))
+            Err(self.parse_err(format!("expected {:?}, got {:?}", expected, self.peek())))
         }
     }
 
@@ -76,7 +72,9 @@ impl Parser {
         self.expect(&TokenKind::Mission)?;
         let name = match self.consume() {
             TokenKind::StringLit(s) => s,
-            other => return Err(self.parse_err(format!("expected mission name string, got {:?}", other))),
+            other => {
+                return Err(self.parse_err(format!("expected mission name string, got {:?}", other)))
+            }
         };
 
         self.expect(&TokenKind::LBrace)?;
@@ -89,14 +87,36 @@ impl Parser {
 
         loop {
             match self.peek().clone() {
-                TokenKind::RBrace => { self.advance(); break; }
-                TokenKind::Eof    => return Err(self.parse_err("unexpected EOF inside mission block")),
-                TokenKind::Vehicle   => { self.advance(); vehicle = Some(self.parse_vehicle()?); }
-                TokenKind::Safety    => { self.advance(); safety = Some(self.parse_safety()?); }
-                TokenKind::Flight    => { self.advance(); flight = Some(self.parse_flight()?); }
-                TokenKind::Sequence  => { self.advance(); sequence = Some(self.parse_sequence()?); }
-                TokenKind::Sensor    => { self.advance(); sensors.push(self.parse_sensor_binding()?); }
-                other => return Err(self.parse_err(format!("unexpected token in mission body: {:?}", other))),
+                TokenKind::RBrace => {
+                    self.advance();
+                    break;
+                }
+                TokenKind::Eof => return Err(self.parse_err("unexpected EOF inside mission block")),
+                TokenKind::Vehicle => {
+                    self.advance();
+                    vehicle = Some(self.parse_vehicle()?);
+                }
+                TokenKind::Safety => {
+                    self.advance();
+                    safety = Some(self.parse_safety()?);
+                }
+                TokenKind::Flight => {
+                    self.advance();
+                    flight = Some(self.parse_flight()?);
+                }
+                TokenKind::Sequence => {
+                    self.advance();
+                    sequence = Some(self.parse_sequence()?);
+                }
+                TokenKind::Sensor => {
+                    self.advance();
+                    sensors.push(self.parse_sensor_binding()?);
+                }
+                other => {
+                    return Err(
+                        self.parse_err(format!("unexpected token in mission body: {:?}", other))
+                    )
+                }
             }
         }
 
@@ -107,7 +127,8 @@ impl Parser {
             vehicle,
             safety,
             flight,
-            sequence: sequence.ok_or_else(|| self.parse_err("mission must have a sequence block"))?,
+            sequence: sequence
+                .ok_or_else(|| self.parse_err("mission must have a sequence block"))?,
             sensors,
         })
     }
@@ -118,9 +139,9 @@ impl Parser {
         self.expect(&TokenKind::Colon)?;
         Ok(match self.consume() {
             TokenKind::Quadcopter => VehicleKind::Quadcopter,
-            TokenKind::FixedWing  => VehicleKind::FixedWing,
+            TokenKind::FixedWing => VehicleKind::FixedWing,
             TokenKind::Hexacopter => VehicleKind::Hexacopter,
-            TokenKind::Ident(s)   => VehicleKind::Custom(s),
+            TokenKind::Ident(s) => VehicleKind::Custom(s),
             other => return Err(self.parse_err(format!("expected vehicle kind, got {:?}", other))),
         })
     }
@@ -133,8 +154,11 @@ impl Parser {
 
         loop {
             match self.peek().clone() {
-                TokenKind::RBrace => { self.advance(); break; }
-                TokenKind::Eof    => return Err(self.parse_err("unexpected EOF in safety block")),
+                TokenKind::RBrace => {
+                    self.advance();
+                    break;
+                }
+                TokenKind::Eof => return Err(self.parse_err("unexpected EOF in safety block")),
                 TokenKind::MaxAltitude => {
                     self.advance();
                     self.expect(&TokenKind::Colon)?;
@@ -165,7 +189,11 @@ impl Parser {
                     self.expect(&TokenKind::Colon)?;
                     block.geofence = Some(self.parse_geofence()?);
                 }
-                other => return Err(self.parse_err(format!("unexpected key in safety block: {:?}", other))),
+                other => {
+                    return Err(
+                        self.parse_err(format!("unexpected key in safety block: {:?}", other))
+                    )
+                }
             }
         }
         Ok(block)
@@ -174,8 +202,8 @@ impl Parser {
     fn parse_failsafe_action(&mut self) -> Result<FailsafeAction, VosaError> {
         match self.consume() {
             TokenKind::ReturnHome => Ok(FailsafeAction::ReturnHome),
-            TokenKind::Land       => Ok(FailsafeAction::Land),
-            TokenKind::Hover      => Ok(FailsafeAction::Hover),
+            TokenKind::Land => Ok(FailsafeAction::Land),
+            TokenKind::Hover => Ok(FailsafeAction::Hover),
             other => Err(self.parse_err(format!("expected failsafe action, got {:?}", other))),
         }
     }
@@ -199,36 +227,52 @@ impl Parser {
 
         loop {
             match self.peek().clone() {
-                TokenKind::RParen => { self.advance(); break; }
-                TokenKind::Eof    => return Err(self.parse_err("unexpected EOF in geofence")),
+                TokenKind::RParen => {
+                    self.advance();
+                    break;
+                }
+                TokenKind::Eof => return Err(self.parse_err("unexpected EOF in geofence")),
                 TokenKind::Center => {
                     self.advance();
                     self.expect(&TokenKind::Colon)?;
                     center = Some(match self.consume() {
                         TokenKind::Home => GeoCenter::Home,
-                        other => return Err(self.parse_err(format!("expected geofence center, got {:?}", other))),
+                        other => {
+                            return Err(self
+                                .parse_err(format!("expected geofence center, got {:?}", other)))
+                        }
                     });
-                    if self.peek() == &TokenKind::Comma { self.advance(); }
+                    if self.peek() == &TokenKind::Comma {
+                        self.advance();
+                    }
                 }
                 TokenKind::Lat => {
                     self.advance();
                     self.expect(&TokenKind::Colon)?;
                     lat = Some(self.expect_number()?);
-                    if self.peek() == &TokenKind::Comma { self.advance(); }
+                    if self.peek() == &TokenKind::Comma {
+                        self.advance();
+                    }
                 }
                 TokenKind::Lon => {
                     self.advance();
                     self.expect(&TokenKind::Colon)?;
                     lon = Some(self.expect_number()?);
-                    if self.peek() == &TokenKind::Comma { self.advance(); }
+                    if self.peek() == &TokenKind::Comma {
+                        self.advance();
+                    }
                 }
                 TokenKind::Radius => {
                     self.advance();
                     self.expect(&TokenKind::Colon)?;
                     radius = Some(self.expect_number()?);
-                    if self.peek() == &TokenKind::Comma { self.advance(); }
+                    if self.peek() == &TokenKind::Comma {
+                        self.advance();
+                    }
                 }
-                other => return Err(self.parse_err(format!("unexpected token in geofence: {:?}", other))),
+                other => {
+                    return Err(self.parse_err(format!("unexpected token in geofence: {:?}", other)))
+                }
             }
         }
 
@@ -258,8 +302,11 @@ impl Parser {
 
         loop {
             match self.peek().clone() {
-                TokenKind::RBrace => { self.advance(); break; }
-                TokenKind::Eof    => return Err(self.parse_err("unexpected EOF in flight block")),
+                TokenKind::RBrace => {
+                    self.advance();
+                    break;
+                }
+                TokenKind::Eof => return Err(self.parse_err("unexpected EOF in flight block")),
                 TokenKind::CruiseAltitude => {
                     self.advance();
                     self.expect(&TokenKind::Colon)?;
@@ -270,7 +317,11 @@ impl Parser {
                     self.expect(&TokenKind::Colon)?;
                     cfg.cruise_speed = Some(self.expect_number()?);
                 }
-                other => return Err(self.parse_err(format!("unexpected key in flight block: {:?}", other))),
+                other => {
+                    return Err(
+                        self.parse_err(format!("unexpected key in flight block: {:?}", other))
+                    )
+                }
             }
         }
         Ok(cfg)
@@ -284,8 +335,11 @@ impl Parser {
 
         loop {
             match self.peek().clone() {
-                TokenKind::RBrace => { self.advance(); break; }
-                TokenKind::Eof    => return Err(self.parse_err("unexpected EOF in sequence block")),
+                TokenKind::RBrace => {
+                    self.advance();
+                    break;
+                }
+                TokenKind::Eof => return Err(self.parse_err("unexpected EOF in sequence block")),
                 _ => statements.push(self.parse_statement()?),
             }
         }
@@ -294,22 +348,24 @@ impl Parser {
 
     fn parse_statement(&mut self) -> Result<Statement, VosaError> {
         match self.peek().clone() {
-            TokenKind::Repeat   => self.parse_repeat(),
-            TokenKind::If       => self.parse_if(),
+            TokenKind::Repeat => self.parse_repeat(),
+            TokenKind::If => self.parse_if(),
             TokenKind::Parallel => self.parse_parallel(),
-            TokenKind::On       => self.parse_on(),
+            TokenKind::On => self.parse_on(),
             _ => Ok(Statement::Command(self.parse_command()?)),
         }
     }
 
     fn parse_repeat(&mut self) -> Result<Statement, VosaError> {
         self.expect(&TokenKind::Repeat)?;
-        
+
         let count = match self.consume() {
             TokenKind::Number(n) => n as usize,
-            other => return Err(self.parse_err(format!("expected repeat count number, got {:?}", other))),
+            other => {
+                return Err(self.parse_err(format!("expected repeat count number, got {:?}", other)))
+            }
         };
-        
+
         let body = self.parse_sequence()?;
         Ok(Statement::Repeat { count, body })
     }
@@ -322,30 +378,35 @@ impl Parser {
 
     fn parse_if(&mut self) -> Result<Statement, VosaError> {
         self.expect(&TokenKind::If)?;
-        
+
         let target = self.consume();
         if target != TokenKind::Battery {
-            return Err(self.parse_err(format!("'if' currently only supports 'battery', got {:?}", target)));
+            return Err(self.parse_err(format!(
+                "'if' currently only supports 'battery', got {:?}",
+                target
+            )));
         }
-        
+
         let operator = match self.consume() {
             TokenKind::LessThan => Operator::LessThan,
             TokenKind::GreaterThan => Operator::GreaterThan,
             other => return Err(self.parse_err(format!("expected '<' or '>', got {:?}", other))),
         };
-        
+
         let threshold_percent = match self.consume() {
             TokenKind::Quantity(v, Unit::Percent) => v,
             TokenKind::Number(v) => v,
-            other => return Err(self.parse_err(format!("expected battery threshold, got {:?}", other))),
+            other => {
+                return Err(self.parse_err(format!("expected battery threshold, got {:?}", other)))
+            }
         };
-        
+
         let body = self.parse_sequence()?;
-        
+
         Ok(Statement::IfBattery {
             operator,
             threshold_percent,
-            body
+            body,
         })
     }
 
@@ -388,26 +449,48 @@ impl Parser {
         };
 
         let body = self.parse_sequence()?;
-        Ok(Statement::OnCondition { condition, duration_s, body })
+        Ok(Statement::OnCondition {
+            condition,
+            duration_s,
+            body,
+        })
     }
 
     /// Parse a `sensor <name> from <MESSAGE>.<field>` declaration.
     fn parse_sensor_binding(&mut self) -> Result<SensorBinding, VosaError> {
         let name = match self.consume() {
             TokenKind::Ident(s) => s,
-            other => return Err(self.parse_err(format!("expected sensor name after 'sensor', got {:?}", other))),
+            other => {
+                return Err(self.parse_err(format!(
+                    "expected sensor name after 'sensor', got {:?}",
+                    other
+                )))
+            }
         };
         self.expect(&TokenKind::From)?;
         let message = match self.consume() {
             TokenKind::Ident(s) => s,
-            other => return Err(self.parse_err(format!("expected MAVLink message name after 'from', got {:?}", other))),
+            other => {
+                return Err(self.parse_err(format!(
+                    "expected MAVLink message name after 'from', got {:?}",
+                    other
+                )))
+            }
         };
         self.expect(&TokenKind::Dot)?;
         let field = match self.consume() {
             TokenKind::Ident(s) => s,
-            other => return Err(self.parse_err(format!("expected field name after '.', got {:?}", other))),
+            other => {
+                return Err(
+                    self.parse_err(format!("expected field name after '.', got {:?}", other))
+                )
+            }
         };
-        Ok(SensorBinding { name, message, field })
+        Ok(SensorBinding {
+            name,
+            message,
+            field,
+        })
     }
 
     /// Parse a single (non-compound) trigger condition.
@@ -460,12 +543,18 @@ impl Parser {
 
     fn parse_command(&mut self) -> Result<Command, VosaError> {
         match self.consume() {
-            TokenKind::Takeoff    => self.parse_takeoff(),
-            TokenKind::Land       => { self.consume_empty_parens(); Ok(Command::Land) }
-            TokenKind::Hover      => self.parse_hover(),
-            TokenKind::Waypoint   => self.parse_waypoint(),
-            TokenKind::ReturnHome => { self.consume_empty_parens(); Ok(Command::ReturnHome) }
-            TokenKind::Camera     => self.parse_camera(),
+            TokenKind::Takeoff => self.parse_takeoff(),
+            TokenKind::Land => {
+                self.consume_empty_parens();
+                Ok(Command::Land)
+            }
+            TokenKind::Hover => self.parse_hover(),
+            TokenKind::Waypoint => self.parse_waypoint(),
+            TokenKind::ReturnHome => {
+                self.consume_empty_parens();
+                Ok(Command::ReturnHome)
+            }
+            TokenKind::Camera => self.parse_camera(),
             other => Err(self.parse_err(format!("unknown command: {:?}", other))),
         }
     }
@@ -474,7 +563,7 @@ impl Parser {
     fn consume_empty_parens(&mut self) {
         if self.peek() == &TokenKind::LParen {
             self.advance(); // (
-            // allow optional RParen
+                            // allow optional RParen
             if self.peek() == &TokenKind::RParen {
                 self.advance(); // )
             }
@@ -520,27 +609,38 @@ impl Parser {
 
         loop {
             match self.peek().clone() {
-                TokenKind::RParen => { self.advance(); break; }
-                TokenKind::Eof    => return Err(self.parse_err("unexpected EOF in waypoint")),
+                TokenKind::RParen => {
+                    self.advance();
+                    break;
+                }
+                TokenKind::Eof => return Err(self.parse_err("unexpected EOF in waypoint")),
                 TokenKind::Lat => {
                     self.advance();
                     self.expect(&TokenKind::Colon)?;
                     lat = Some(self.expect_number()?);
-                    if self.peek() == &TokenKind::Comma { self.advance(); }
+                    if self.peek() == &TokenKind::Comma {
+                        self.advance();
+                    }
                 }
                 TokenKind::Lon => {
                     self.advance();
                     self.expect(&TokenKind::Colon)?;
                     lon = Some(self.expect_number()?);
-                    if self.peek() == &TokenKind::Comma { self.advance(); }
+                    if self.peek() == &TokenKind::Comma {
+                        self.advance();
+                    }
                 }
                 TokenKind::Alt | TokenKind::Altitude => {
                     self.advance();
                     self.expect(&TokenKind::Colon)?;
                     alt = Some(self.expect_number()?);
-                    if self.peek() == &TokenKind::Comma { self.advance(); }
+                    if self.peek() == &TokenKind::Comma {
+                        self.advance();
+                    }
                 }
-                other => return Err(self.parse_err(format!("unexpected param in waypoint: {:?}", other))),
+                other => {
+                    return Err(self.parse_err(format!("unexpected param in waypoint: {:?}", other)))
+                }
             }
         }
 
@@ -560,30 +660,46 @@ impl Parser {
 
         loop {
             match self.peek().clone() {
-                TokenKind::RParen => { self.advance(); break; }
-                TokenKind::Eof    => return Err(self.parse_err("unexpected EOF in camera")),
+                TokenKind::RParen => {
+                    self.advance();
+                    break;
+                }
+                TokenKind::Eof => return Err(self.parse_err("unexpected EOF in camera")),
                 TokenKind::Action => {
                     self.advance();
                     self.expect(&TokenKind::Colon)?;
                     action = Some(match self.consume() {
                         TokenKind::Record => CameraAction::Record,
-                        TokenKind::Photo  => CameraAction::Photo,
-                        TokenKind::Stop   => CameraAction::Stop,
-                        other => return Err(self.parse_err(format!("unknown camera action: {:?}", other))),
+                        TokenKind::Photo => CameraAction::Photo,
+                        TokenKind::Stop => CameraAction::Stop,
+                        other => {
+                            return Err(
+                                self.parse_err(format!("unknown camera action: {:?}", other))
+                            )
+                        }
                     });
-                    if self.peek() == &TokenKind::Comma { self.advance(); }
+                    if self.peek() == &TokenKind::Comma {
+                        self.advance();
+                    }
                 }
                 TokenKind::Resolution => {
                     self.advance();
                     self.expect(&TokenKind::Colon)?;
                     resolution = Some(match self.consume() {
                         TokenKind::StringLit(s) => s,
-                        TokenKind::Ident(s)     => s,
-                        other => return Err(self.parse_err(format!("expected resolution string, got {:?}", other))),
+                        TokenKind::Ident(s) => s,
+                        other => {
+                            return Err(self
+                                .parse_err(format!("expected resolution string, got {:?}", other)))
+                        }
                     });
-                    if self.peek() == &TokenKind::Comma { self.advance(); }
+                    if self.peek() == &TokenKind::Comma {
+                        self.advance();
+                    }
                 }
-                other => return Err(self.parse_err(format!("unexpected param in camera: {:?}", other))),
+                other => {
+                    return Err(self.parse_err(format!("unexpected param in camera: {:?}", other)))
+                }
             }
         }
 

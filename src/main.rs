@@ -51,9 +51,15 @@ fn main() {
     let cli = Cli::parse();
 
     match cli.command {
-        Command::Run { file, ast, mavlink, ros2, inject } => cmd_run(file, ast, mavlink, ros2, inject),
-        Command::Check { file }   => cmd_check(file),
-        Command::Docs             => cmd_docs(),
+        Command::Run {
+            file,
+            ast,
+            mavlink,
+            ros2,
+            inject,
+        } => cmd_run(file, ast, mavlink, ros2, inject),
+        Command::Check { file } => cmd_check(file),
+        Command::Docs => cmd_docs(),
     }
 }
 
@@ -78,7 +84,13 @@ fn parse_injection(s: &str) -> std::collections::HashMap<String, f64> {
         .collect()
 }
 
-fn cmd_run(file: PathBuf, print_ast: bool, mavlink: Option<String>, ros2: Option<u32>, inject: Option<String>) {
+fn cmd_run(
+    file: PathBuf,
+    print_ast: bool,
+    mavlink: Option<String>,
+    ros2: Option<u32>,
+    inject: Option<String>,
+) {
     println!("{}", banner());
     let src = read_file(&file);
 
@@ -116,7 +128,9 @@ fn cmd_run(file: PathBuf, print_ast: bool, mavlink: Option<String>, ros2: Option
         #[cfg(not(feature = "ros2"))]
         {
             let _ = domain_id;
-            eprintln!("ROS 2 support is not compiled in. Rebuild with: cargo build --features ros2");
+            eprintln!(
+                "ROS 2 support is not compiled in. Rebuild with: cargo build --features ros2"
+            );
             std::process::exit(1);
         }
     } else if let Some(conn) = mavlink {
@@ -139,7 +153,11 @@ fn cmd_run(file: PathBuf, print_ast: bool, mavlink: Option<String>, ros2: Option
         Ok(report) => {
             println!("\n{}", "── Execution Log ──".cyan().bold());
             for step in &report.steps {
-                println!("  {:>3}  {}", step.index.to_string().dimmed(), step.description);
+                println!(
+                    "  {:>3}  {}",
+                    step.index.to_string().dimmed(),
+                    step.description
+                );
             }
             println!("\n{}", "── Mission Summary ──".cyan().bold());
             println!("  Mission : {}", report.mission_name.bold());
@@ -165,7 +183,10 @@ fn cmd_check(file: PathBuf) {
         Ok(mission) => {
             let sandbox = vosa::safety::SafetySandbox::new();
             match sandbox.validate(&mission) {
-                Ok(()) => println!("{}", format!("\"{}\" is valid.", mission.name).green().bold()),
+                Ok(()) => println!(
+                    "{}",
+                    format!("\"{}\" is valid.", mission.name).green().bold()
+                ),
                 Err(e) => {
                     eprintln!("{} {e}", "safety violation:".yellow().bold());
                     std::process::exit(2);

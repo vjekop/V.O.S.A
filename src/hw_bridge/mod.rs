@@ -1,9 +1,9 @@
 use crate::error::VosaError;
 use crate::parser::ast::*;
 use crate::runtime::ExecutionReport;
-use std::collections::HashMap;
 use mavlink::common::{self, MavMessage};
 use mavlink::MavConnection;
+use std::collections::HashMap;
 
 #[cfg(feature = "ros2")]
 pub mod ros2;
@@ -85,15 +85,17 @@ impl TelemetryState {
                 self.home_lat = d.latitude as f64 / 1e7;
                 self.home_lon = d.longitude as f64 / 1e7;
                 if !self.home_set {
-                    println!("[MAVLink] Home GPS: lat={:.7}, lon={:.7}, alt={:.1}m",
-                        self.home_lat, self.home_lon,
-                        d.altitude as f64 / 1000.0);
+                    println!(
+                        "[MAVLink] Home GPS: lat={:.7}, lon={:.7}, alt={:.1}m",
+                        self.home_lat,
+                        self.home_lon,
+                        d.altitude as f64 / 1000.0
+                    );
                 }
                 self.home_set = true;
             }
             MavMessage::WIND_COV(d) => {
-                self.wind_speed_ms =
-                    ((d.wind_x as f64).powi(2) + (d.wind_y as f64).powi(2)).sqrt();
+                self.wind_speed_ms = ((d.wind_x as f64).powi(2) + (d.wind_y as f64).powi(2)).sqrt();
             }
             // Obstacle detection: DISTANCE_SENSOR reports a single range reading.
             // Flag an obstacle if the sensor is not pointing down and reads < 5 m (500 cm).
@@ -127,23 +129,29 @@ impl TelemetryState {
 /// Returns `None` if the message type doesn't match or the field isn't supported.
 fn extract_sensor_value(message: &str, field: &str, msg: &MavMessage) -> Option<f64> {
     match (message, field, msg) {
-        ("ATTITUDE", "roll",      MavMessage::ATTITUDE(d)) => Some(d.roll as f64),
-        ("ATTITUDE", "pitch",     MavMessage::ATTITUDE(d)) => Some(d.pitch as f64),
-        ("ATTITUDE", "yaw",       MavMessage::ATTITUDE(d)) => Some(d.yaw as f64),
+        ("ATTITUDE", "roll", MavMessage::ATTITUDE(d)) => Some(d.roll as f64),
+        ("ATTITUDE", "pitch", MavMessage::ATTITUDE(d)) => Some(d.pitch as f64),
+        ("ATTITUDE", "yaw", MavMessage::ATTITUDE(d)) => Some(d.yaw as f64),
         ("ATTITUDE", "rollspeed", MavMessage::ATTITUDE(d)) => Some(d.rollspeed as f64),
-        ("ATTITUDE", "pitchspeed",MavMessage::ATTITUDE(d)) => Some(d.pitchspeed as f64),
-        ("ATTITUDE", "yawspeed",  MavMessage::ATTITUDE(d)) => Some(d.yawspeed as f64),
-        ("VFR_HUD", "airspeed",   MavMessage::VFR_HUD(d))  => Some(d.airspeed as f64),
-        ("VFR_HUD", "groundspeed",MavMessage::VFR_HUD(d))  => Some(d.groundspeed as f64),
-        ("VFR_HUD", "alt",        MavMessage::VFR_HUD(d))  => Some(d.alt as f64),
-        ("VFR_HUD", "climb",      MavMessage::VFR_HUD(d))  => Some(d.climb as f64),
-        ("WIND_COV", "wind_x",    MavMessage::WIND_COV(d)) => Some(d.wind_x as f64),
-        ("WIND_COV", "wind_y",    MavMessage::WIND_COV(d)) => Some(d.wind_y as f64),
-        ("GPS_RAW_INT", "eph",                MavMessage::GPS_RAW_INT(d)) => Some(d.eph as f64),
-        ("GPS_RAW_INT", "epv",                MavMessage::GPS_RAW_INT(d)) => Some(d.epv as f64),
-        ("GPS_RAW_INT", "satellites_visible", MavMessage::GPS_RAW_INT(d)) => Some(d.satellites_visible as f64),
-        ("SYS_STATUS", "battery_remaining",   MavMessage::SYS_STATUS(d))  => Some(d.battery_remaining as f64),
-        ("DISTANCE_SENSOR", "current_distance", MavMessage::DISTANCE_SENSOR(d)) => Some(d.current_distance as f64),
+        ("ATTITUDE", "pitchspeed", MavMessage::ATTITUDE(d)) => Some(d.pitchspeed as f64),
+        ("ATTITUDE", "yawspeed", MavMessage::ATTITUDE(d)) => Some(d.yawspeed as f64),
+        ("VFR_HUD", "airspeed", MavMessage::VFR_HUD(d)) => Some(d.airspeed as f64),
+        ("VFR_HUD", "groundspeed", MavMessage::VFR_HUD(d)) => Some(d.groundspeed as f64),
+        ("VFR_HUD", "alt", MavMessage::VFR_HUD(d)) => Some(d.alt as f64),
+        ("VFR_HUD", "climb", MavMessage::VFR_HUD(d)) => Some(d.climb as f64),
+        ("WIND_COV", "wind_x", MavMessage::WIND_COV(d)) => Some(d.wind_x as f64),
+        ("WIND_COV", "wind_y", MavMessage::WIND_COV(d)) => Some(d.wind_y as f64),
+        ("GPS_RAW_INT", "eph", MavMessage::GPS_RAW_INT(d)) => Some(d.eph as f64),
+        ("GPS_RAW_INT", "epv", MavMessage::GPS_RAW_INT(d)) => Some(d.epv as f64),
+        ("GPS_RAW_INT", "satellites_visible", MavMessage::GPS_RAW_INT(d)) => {
+            Some(d.satellites_visible as f64)
+        }
+        ("SYS_STATUS", "battery_remaining", MavMessage::SYS_STATUS(d)) => {
+            Some(d.battery_remaining as f64)
+        }
+        ("DISTANCE_SENSOR", "current_distance", MavMessage::DISTANCE_SENSOR(d)) => {
+            Some(d.current_distance as f64)
+        }
         _ => None,
     }
 }
@@ -238,7 +246,10 @@ impl MavlinkBridge {
         // Poll with logging until fix
         for attempt in 0..GPS_WAIT_ATTEMPTS {
             if telemetry.gps_fix_type >= 3 {
-                println!("[MAVLink] GPS lock acquired (fix_type={})", telemetry.gps_fix_type);
+                println!(
+                    "[MAVLink] GPS lock acquired (fix_type={})",
+                    telemetry.gps_fix_type
+                );
                 break;
             }
             if attempt % 100 == 0 {
@@ -249,9 +260,7 @@ impl MavlinkBridge {
             }
             match vehicle.recv() {
                 Ok((_, msg)) => telemetry.update(&msg),
-                Err(e) => {
-                    return Err(VosaError::RuntimeError(format!("GPS wait error: {e}")))
-                }
+                Err(e) => return Err(VosaError::RuntimeError(format!("GPS wait error: {e}"))),
             }
         }
         if telemetry.gps_fix_type < 3 {
@@ -268,9 +277,7 @@ impl MavlinkBridge {
             }
             match vehicle.recv() {
                 Ok((_, msg)) => telemetry.update(&msg),
-                Err(e) => {
-                    return Err(VosaError::RuntimeError(format!("Home wait error: {e}")))
-                }
+                Err(e) => return Err(VosaError::RuntimeError(format!("Home wait error: {e}"))),
             }
         }
         if !telemetry.home_set {
@@ -286,7 +293,11 @@ impl MavlinkBridge {
             PX4_CUSTOM_MAIN_MODE_AUTO,
             PX4_CUSTOM_SUB_MODE_AUTO_MISSION,
         )?;
-        wait_for_command_ack(&vehicle, &mut telemetry, common::MavCmd::MAV_CMD_DO_SET_MODE)?;
+        wait_for_command_ack(
+            &vehicle,
+            &mut telemetry,
+            common::MavCmd::MAV_CMD_DO_SET_MODE,
+        )?;
         println!("[MAVLink] Mode: AUTO.MISSION");
 
         // ── 5. Build and upload mission ───────────────────────────────────────
@@ -348,11 +359,23 @@ impl MavlinkBridge {
             })
             .collect::<Vec<_>>();
 
-        monitor_mission(&vehicle, &mut telemetry, &mut triggers, item_count, &mut steps, mission.safety.as_ref(), &mission.sensors)?;
+        monitor_mission(
+            &vehicle,
+            &mut telemetry,
+            &mut triggers,
+            item_count,
+            &mut steps,
+            mission.safety.as_ref(),
+            &mission.sensors,
+        )?;
 
         // ── 9. Return to launch after waypoints complete ──────────────────────
         println!("[MAVLink] Waypoints complete — sending RTL");
-        set_flight_mode(&vehicle, PX4_CUSTOM_MAIN_MODE_AUTO, PX4_CUSTOM_SUB_MODE_AUTO_RTL)?;
+        set_flight_mode(
+            &vehicle,
+            PX4_CUSTOM_MAIN_MODE_AUTO,
+            PX4_CUSTOM_SUB_MODE_AUTO_RTL,
+        )?;
 
         println!("[MAVLink] Mission complete");
         Ok(ExecutionReport {
@@ -389,12 +412,12 @@ where
                     return Ok(());
                 }
             }
-            Err(e) => {
-                return Err(VosaError::RuntimeError(format!("MAVLink recv error: {e}")))
-            }
+            Err(e) => return Err(VosaError::RuntimeError(format!("MAVLink recv error: {e}"))),
         }
     }
-    Err(VosaError::RuntimeError("recv_until: max attempts exhausted".into()))
+    Err(VosaError::RuntimeError(
+        "recv_until: max attempts exhausted".into(),
+    ))
 }
 
 // ── Mission monitoring + reactive triggers ────────────────────────────────────
@@ -445,10 +468,18 @@ fn monitor_mission<C: MavConnection<MavMessage>>(
                             });
                             match action {
                                 FailsafeAction::ReturnHome => {
-                                    set_flight_mode(vehicle, PX4_CUSTOM_MAIN_MODE_AUTO, PX4_CUSTOM_SUB_MODE_AUTO_RTL)?;
+                                    set_flight_mode(
+                                        vehicle,
+                                        PX4_CUSTOM_MAIN_MODE_AUTO,
+                                        PX4_CUSTOM_SUB_MODE_AUTO_RTL,
+                                    )?;
                                 }
                                 FailsafeAction::Land => {
-                                    set_flight_mode(vehicle, PX4_CUSTOM_MAIN_MODE_AUTO, PX4_CUSTOM_SUB_MODE_AUTO_LAND)?;
+                                    set_flight_mode(
+                                        vehicle,
+                                        PX4_CUSTOM_MAIN_MODE_AUTO,
+                                        PX4_CUSTOM_SUB_MODE_AUTO_LAND,
+                                    )?;
                                 }
                                 FailsafeAction::Hover => {
                                     send_command_long(
@@ -468,13 +499,12 @@ fn monitor_mission<C: MavConnection<MavMessage>>(
                 if let MavMessage::MISSION_ITEM_REACHED(data) = &msg {
                     if last_reached_seq != Some(data.seq) {
                         last_reached_seq = Some(data.seq);
-                        let desc = format!(
-                            "[REACHED] Mission item {}/{}",
-                            data.seq + 1,
-                            item_count
+                        let desc =
+                            format!("[REACHED] Mission item {}/{}", data.seq + 1, item_count);
+                        println!(
+                            "[MAVLink] {desc}  batt={:.1}%  wind={:.1}m/s",
+                            telemetry.battery_percent, telemetry.wind_speed_ms
                         );
-                        println!("[MAVLink] {desc}  batt={:.1}%  wind={:.1}m/s",
-                            telemetry.battery_percent, telemetry.wind_speed_ms);
                         steps.push(crate::runtime::ExecutionStep {
                             index: steps.len(),
                             description: desc,
@@ -542,11 +572,14 @@ fn fire_triggers<C: MavConnection<MavMessage>>(
         if should_fire {
             trigger.fired = true;
             let label = trigger_label(&trigger.condition);
-            let dur_desc = trigger.duration_s
+            let dur_desc = trigger
+                .duration_s
                 .map(|d| format!(" (held {d}s)"))
                 .unwrap_or_default();
-            println!("[MAVLink] TRIGGER FIRED: on {label}{dur_desc}  batt={:.1}%  wind={:.1}m/s",
-                telemetry.battery_percent, telemetry.wind_speed_ms);
+            println!(
+                "[MAVLink] TRIGGER FIRED: on {label}{dur_desc}  batt={:.1}%  wind={:.1}m/s",
+                telemetry.battery_percent, telemetry.wind_speed_ms
+            );
             steps.push(crate::runtime::ExecutionStep {
                 index: steps.len(),
                 description: format!("[TRIGGER FIRED] on {label}"),
@@ -559,7 +592,9 @@ fn fire_triggers<C: MavConnection<MavMessage>>(
             for cmd in &trigger.commands.clone() {
                 match cmd {
                     Command::Land if rtl_sent => {
-                        println!("[MAVLink] [TRIGGER] Skipping land() — RTL already includes auto-land");
+                        println!(
+                            "[MAVLink] [TRIGGER] Skipping land() — RTL already includes auto-land"
+                        );
                     }
                     Command::ReturnHome => {
                         execute_trigger_command(vehicle, cmd, steps)?;
@@ -586,24 +621,34 @@ fn fire_triggers<C: MavConnection<MavMessage>>(
 /// Evaluate a trigger condition against live telemetry.
 fn eval_trigger(condition: &TriggerCondition, t: &TelemetryState) -> bool {
     match condition {
-        TriggerCondition::Battery { operator, threshold_percent } => match operator {
-            Operator::LessThan    => t.battery_percent < *threshold_percent,
+        TriggerCondition::Battery {
+            operator,
+            threshold_percent,
+        } => match operator {
+            Operator::LessThan => t.battery_percent < *threshold_percent,
             Operator::GreaterThan => t.battery_percent > *threshold_percent,
         },
-        TriggerCondition::Wind { operator, threshold_ms } => match operator {
-            Operator::LessThan    => t.wind_speed_ms < *threshold_ms,
+        TriggerCondition::Wind {
+            operator,
+            threshold_ms,
+        } => match operator {
+            Operator::LessThan => t.wind_speed_ms < *threshold_ms,
             Operator::GreaterThan => t.wind_speed_ms > *threshold_ms,
         },
         TriggerCondition::ObstacleDetected => t.obstacle_detected,
-        TriggerCondition::Custom { name, operator, threshold } => {
+        TriggerCondition::Custom {
+            name,
+            operator,
+            threshold,
+        } => {
             let value = t.custom_sensors.get(name).copied().unwrap_or(0.0);
             match operator {
-                Operator::LessThan    => value < *threshold,
+                Operator::LessThan => value < *threshold,
                 Operator::GreaterThan => value > *threshold,
             }
         }
         TriggerCondition::And(a, b) => eval_trigger(a, t) && eval_trigger(b, t),
-        TriggerCondition::Or(a, b)  => eval_trigger(a, t) || eval_trigger(b, t),
+        TriggerCondition::Or(a, b) => eval_trigger(a, t) || eval_trigger(b, t),
     }
 }
 
@@ -616,12 +661,20 @@ fn execute_trigger_command<C: MavConnection<MavMessage>>(
     let desc = match cmd {
         Command::ReturnHome => {
             // Switch to AUTO.RTL mode
-            set_flight_mode(vehicle, PX4_CUSTOM_MAIN_MODE_AUTO, PX4_CUSTOM_SUB_MODE_AUTO_RTL)?;
+            set_flight_mode(
+                vehicle,
+                PX4_CUSTOM_MAIN_MODE_AUTO,
+                PX4_CUSTOM_SUB_MODE_AUTO_RTL,
+            )?;
             "[TRIGGER CMD] MAV_CMD_DO_SET_MODE AUTO.RTL".to_string()
         }
         Command::Land => {
             // Switch to AUTO.LAND mode
-            set_flight_mode(vehicle, PX4_CUSTOM_MAIN_MODE_AUTO, PX4_CUSTOM_SUB_MODE_AUTO_LAND)?;
+            set_flight_mode(
+                vehicle,
+                PX4_CUSTOM_MAIN_MODE_AUTO,
+                PX4_CUSTOM_SUB_MODE_AUTO_LAND,
+            )?;
             "[TRIGGER CMD] MAV_CMD_DO_SET_MODE AUTO.LAND".to_string()
         }
         Command::Hover { duration } => {
@@ -680,7 +733,10 @@ fn set_flight_mode<C: MavConnection<MavMessage>>(
             common::MavModeFlag::MAV_MODE_FLAG_CUSTOM_MODE_ENABLED.bits() as f32,
             main_mode,
             sub_mode,
-            0.0, 0.0, 0.0, 0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
         ],
     )
 }
@@ -716,9 +772,12 @@ fn wait_for_command_ack<C: MavConnection<MavMessage>>(
     // Use a longer window for ACKs and don't hard-fail — PX4 sometimes
     // executes the command (e.g. arm) before sending the ACK, causing a
     // race if we bail out too early and stop sending heartbeats.
-    let result = recv_until(vehicle, telemetry, WAIT_ATTEMPTS * 5, |msg| {
-        matches!(msg, MavMessage::COMMAND_ACK(ack) if ack.command == command)
-    });
+    let result = recv_until(
+        vehicle,
+        telemetry,
+        WAIT_ATTEMPTS * 5,
+        |msg| matches!(msg, MavMessage::COMMAND_ACK(ack) if ack.command == command),
+    );
     if result.is_err() {
         println!("[MAVLink] Warning: no ACK received for {command:?} — continuing anyway");
     }
@@ -759,7 +818,9 @@ fn upload_mission<C: MavConnection<MavMessage>>(
                         }
                         println!("[MAVLink]   Item {}/{}", seq + 1, items.len());
                         vehicle
-                            .send_default(&items[seq].to_mission_item_int(seq as u16, home_lat, home_lon))
+                            .send_default(
+                                &items[seq].to_mission_item_int(seq as u16, home_lat, home_lon),
+                            )
                             .map_err(|e| {
                                 VosaError::RuntimeError(format!(
                                     "MISSION_ITEM_INT[{seq}] failed: {e}"
@@ -777,11 +838,7 @@ fn upload_mission<C: MavConnection<MavMessage>>(
                     _ => {}
                 }
             }
-            Err(e) => {
-                return Err(VosaError::RuntimeError(format!(
-                    "Upload recv error: {e}"
-                )))
-            }
+            Err(e) => return Err(VosaError::RuntimeError(format!("Upload recv error: {e}"))),
         }
     }
 
@@ -826,12 +883,21 @@ fn collect_triggers(stmts: &[Statement]) -> Vec<ActiveTrigger> {
     stmts
         .iter()
         .filter_map(|stmt| {
-            if let Statement::OnCondition { condition, duration_s, body } = stmt {
+            if let Statement::OnCondition {
+                condition,
+                duration_s,
+                body,
+            } = stmt
+            {
                 let commands: Vec<Command> = body
                     .statements
                     .iter()
                     .filter_map(|s| {
-                        if let Statement::Command(cmd) = s { Some(cmd.clone()) } else { None }
+                        if let Statement::Command(cmd) = s {
+                            Some(cmd.clone())
+                        } else {
+                            None
+                        }
                     })
                     .collect();
                 Some(ActiveTrigger {
@@ -850,21 +916,43 @@ fn collect_triggers(stmts: &[Statement]) -> Vec<ActiveTrigger> {
 
 fn trigger_label(condition: &TriggerCondition) -> String {
     match condition {
-        TriggerCondition::Battery { operator, threshold_percent } => {
-            let op = if *operator == Operator::LessThan { "<" } else { ">" };
+        TriggerCondition::Battery {
+            operator,
+            threshold_percent,
+        } => {
+            let op = if *operator == Operator::LessThan {
+                "<"
+            } else {
+                ">"
+            };
             format!("battery {op} {threshold_percent}%")
         }
-        TriggerCondition::Wind { operator, threshold_ms } => {
-            let op = if *operator == Operator::LessThan { "<" } else { ">" };
+        TriggerCondition::Wind {
+            operator,
+            threshold_ms,
+        } => {
+            let op = if *operator == Operator::LessThan {
+                "<"
+            } else {
+                ">"
+            };
             format!("wind {op} {threshold_ms}m/s")
         }
         TriggerCondition::ObstacleDetected => "obstacle_detected".into(),
-        TriggerCondition::Custom { name, operator, threshold } => {
-            let op = if *operator == Operator::LessThan { "<" } else { ">" };
+        TriggerCondition::Custom {
+            name,
+            operator,
+            threshold,
+        } => {
+            let op = if *operator == Operator::LessThan {
+                "<"
+            } else {
+                ">"
+            };
             format!("{name} {op} {threshold}")
         }
         TriggerCondition::And(a, b) => format!("{} and {}", trigger_label(a), trigger_label(b)),
-        TriggerCondition::Or(a, b)  => format!("{} or {}",  trigger_label(a), trigger_label(b)),
+        TriggerCondition::Or(a, b) => format!("{} or {}", trigger_label(a), trigger_label(b)),
     }
 }
 
@@ -893,7 +981,10 @@ impl MavItem {
                 (home_lat * 1e7) as i32,
                 (home_lon * 1e7) as i32,
                 *altitude,
-                0.0, 0.0, 0.0, f32::NAN,
+                0.0,
+                0.0,
+                0.0,
+                f32::NAN,
                 common::MavFrame::MAV_FRAME_GLOBAL_RELATIVE_ALT,
             ),
             MavItem::Waypoint { lat, lon, alt } => (
@@ -901,43 +992,76 @@ impl MavItem {
                 (*lat * 1e7) as i32,
                 (*lon * 1e7) as i32,
                 *alt,
-                0.0, 0.0, 0.0, f32::NAN,
+                0.0,
+                0.0,
+                0.0,
+                f32::NAN,
                 common::MavFrame::MAV_FRAME_GLOBAL_RELATIVE_ALT,
             ),
             MavItem::LoiterTime { duration } => (
                 common::MavCmd::MAV_CMD_NAV_LOITER_TIME,
-                0, 0, 0.0,
-                *duration, 0.0, 0.0, f32::NAN,
+                0,
+                0,
+                0.0,
+                *duration,
+                0.0,
+                0.0,
+                f32::NAN,
                 common::MavFrame::MAV_FRAME_GLOBAL_RELATIVE_ALT,
             ),
             MavItem::Land => (
                 common::MavCmd::MAV_CMD_NAV_LAND,
-                0, 0, 0.0,
-                0.0, 0.0, 0.0, f32::NAN,
+                0,
+                0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                f32::NAN,
                 common::MavFrame::MAV_FRAME_GLOBAL_RELATIVE_ALT,
             ),
             MavItem::ReturnHome => (
                 common::MavCmd::MAV_CMD_NAV_RETURN_TO_LAUNCH,
-                0, 0, 0.0,
-                0.0, 0.0, 0.0, 0.0,
+                0,
+                0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
                 common::MavFrame::MAV_FRAME_GLOBAL_RELATIVE_ALT,
             ),
             MavItem::CameraStartCapture => (
                 common::MavCmd::MAV_CMD_VIDEO_START_CAPTURE,
-                0, 0, 0.0,
-                0.0, 0.0, 0.0, 0.0,
+                0,
+                0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
                 common::MavFrame::MAV_FRAME_MISSION,
             ),
             MavItem::CameraStopCapture => (
                 common::MavCmd::MAV_CMD_VIDEO_STOP_CAPTURE,
-                0, 0, 0.0,
-                0.0, 0.0, 0.0, 0.0,
+                0,
+                0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
                 common::MavFrame::MAV_FRAME_MISSION,
             ),
             MavItem::CameraPhoto => (
                 common::MavCmd::MAV_CMD_IMAGE_START_CAPTURE,
-                0, 0, 0.0,
-                0.0, 1.0, 1.0, f32::NAN,
+                0,
+                0,
+                0.0,
+                0.0,
+                1.0,
+                1.0,
+                f32::NAN,
                 common::MavFrame::MAV_FRAME_MISSION,
             ),
         };
@@ -986,11 +1110,17 @@ impl MavItem {
 
 fn command_to_mav_item(cmd: &Command) -> Option<MavItem> {
     Some(match cmd {
-        Command::Takeoff { altitude } => MavItem::Takeoff { altitude: *altitude as f32 },
-        Command::Waypoint { lat, lon, alt } => {
-            MavItem::Waypoint { lat: *lat, lon: *lon, alt: *alt as f32 }
-        }
-        Command::Hover { duration } => MavItem::LoiterTime { duration: *duration as f32 },
+        Command::Takeoff { altitude } => MavItem::Takeoff {
+            altitude: *altitude as f32,
+        },
+        Command::Waypoint { lat, lon, alt } => MavItem::Waypoint {
+            lat: *lat,
+            lon: *lon,
+            alt: *alt as f32,
+        },
+        Command::Hover { duration } => MavItem::LoiterTime {
+            duration: *duration as f32,
+        },
         // Land and ReturnHome are sent as COMMAND_LONG after mission upload,
         // not as mission items — PX4 gz_x500 SITL rejects them as NAV items.
         Command::Land => {
@@ -998,7 +1128,9 @@ fn command_to_mav_item(cmd: &Command) -> Option<MavItem> {
             return None;
         }
         Command::ReturnHome => {
-            println!("[MAVLink] Skipping return_home() as mission item — will send as COMMAND_LONG");
+            println!(
+                "[MAVLink] Skipping return_home() as mission item — will send as COMMAND_LONG"
+            );
             return None;
         }
         // Camera commands are skipped in MAVLink mode — PX4 SITL rejects

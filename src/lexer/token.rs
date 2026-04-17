@@ -100,7 +100,7 @@ pub enum TokenKind {
     Duration,
     Action,
     Resolution,
-    
+
     // ── State variables / trigger conditions ─────────────────────────────────
     /// `battery` — current battery level (%)
     Battery,

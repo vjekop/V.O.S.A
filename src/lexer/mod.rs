@@ -95,17 +95,46 @@ impl Lexer {
 
         // Single-character punctuation
         let kind = match ch {
-            '{' => { self.advance(); TokenKind::LBrace }
-            '}' => { self.advance(); TokenKind::RBrace }
-            '(' => { self.advance(); TokenKind::LParen }
-            ')' => { self.advance(); TokenKind::RParen }
-            ':' => { self.advance(); TokenKind::Colon }
-            ',' => { self.advance(); TokenKind::Comma }
-            '<' => { self.advance(); TokenKind::LessThan }
-            '>' => { self.advance(); TokenKind::GreaterThan }
-            '.' => { self.advance(); TokenKind::Dot }
+            '{' => {
+                self.advance();
+                TokenKind::LBrace
+            }
+            '}' => {
+                self.advance();
+                TokenKind::RBrace
+            }
+            '(' => {
+                self.advance();
+                TokenKind::LParen
+            }
+            ')' => {
+                self.advance();
+                TokenKind::RParen
+            }
+            ':' => {
+                self.advance();
+                TokenKind::Colon
+            }
+            ',' => {
+                self.advance();
+                TokenKind::Comma
+            }
+            '<' => {
+                self.advance();
+                TokenKind::LessThan
+            }
+            '>' => {
+                self.advance();
+                TokenKind::GreaterThan
+            }
+            '.' => {
+                self.advance();
+                TokenKind::Dot
+            }
             '"' => self.lex_string()?,
-            c if c.is_ascii_digit() || (c == '-' && self.peek2().map_or(false, |d| d.is_ascii_digit())) => {
+            c if c.is_ascii_digit()
+                || (c == '-' && self.peek2().map_or(false, |d| d.is_ascii_digit())) =>
+            {
                 self.lex_number()?
             }
             c if c.is_alphabetic() || c == '_' => self.lex_identifier_or_keyword(),
@@ -149,7 +178,7 @@ impl Lexer {
         let unit = match self.peek() {
             Some('m') => {
                 self.advance(); // eat 'm'
-                // Check for 'm/s'
+                                // Check for 'm/s'
                 if self.peek() == Some('/') && self.peek2() == Some('s') {
                     self.advance(); // /
                     self.advance(); // s
@@ -168,8 +197,15 @@ impl Lexer {
             }
             Some('d') => {
                 // deg
-                if self.src.get(self.pos..self.pos + 3).map(|s| s.iter().collect::<String>()) == Some("deg".into()) {
-                    self.advance(); self.advance(); self.advance();
+                if self
+                    .src
+                    .get(self.pos..self.pos + 3)
+                    .map(|s| s.iter().collect::<String>())
+                    == Some("deg".into())
+                {
+                    self.advance();
+                    self.advance();
+                    self.advance();
                     Some(Unit::Degrees)
                 } else {
                     None
@@ -195,70 +231,70 @@ impl Lexer {
     fn keyword_or_ident(&self, s: String) -> TokenKind {
         match s.as_str() {
             // Block keywords
-            "mission"       => TokenKind::Mission,
-            "safety"        => TokenKind::Safety,
-            "flight"        => TokenKind::Flight,
-            "sequence"      => TokenKind::Sequence,
-            "vehicle"       => TokenKind::Vehicle,
-            "repeat"        => TokenKind::Repeat,
-            "if"            => TokenKind::If,
-            "parallel"      => TokenKind::Parallel,
+            "mission" => TokenKind::Mission,
+            "safety" => TokenKind::Safety,
+            "flight" => TokenKind::Flight,
+            "sequence" => TokenKind::Sequence,
+            "vehicle" => TokenKind::Vehicle,
+            "repeat" => TokenKind::Repeat,
+            "if" => TokenKind::If,
+            "parallel" => TokenKind::Parallel,
             // Named values
-            "home"          => TokenKind::Home,
-            "circle"        => TokenKind::Circle,
-            "radius"        => TokenKind::Radius,
-            "center"        => TokenKind::Center,
+            "home" => TokenKind::Home,
+            "circle" => TokenKind::Circle,
+            "radius" => TokenKind::Radius,
+            "center" => TokenKind::Center,
             // Failsafe actions / commands
-            "return_home"   => TokenKind::ReturnHome,
-            "land"          => TokenKind::Land,
-            "hover"         => TokenKind::Hover,
-            "takeoff"       => TokenKind::Takeoff,
-            "waypoint"      => TokenKind::Waypoint,
-            "camera"        => TokenKind::Camera,
+            "return_home" => TokenKind::ReturnHome,
+            "land" => TokenKind::Land,
+            "hover" => TokenKind::Hover,
+            "takeoff" => TokenKind::Takeoff,
+            "waypoint" => TokenKind::Waypoint,
+            "camera" => TokenKind::Camera,
             // Camera actions
-            "record"        => TokenKind::Record,
-            "photo"         => TokenKind::Photo,
-            "stop"          => TokenKind::Stop,
+            "record" => TokenKind::Record,
+            "photo" => TokenKind::Photo,
+            "stop" => TokenKind::Stop,
             // Vehicle types
-            "Quadcopter"    => TokenKind::Quadcopter,
-            "FixedWing"     => TokenKind::FixedWing,
-            "Hexacopter"    => TokenKind::Hexacopter,
+            "Quadcopter" => TokenKind::Quadcopter,
+            "FixedWing" => TokenKind::FixedWing,
+            "Hexacopter" => TokenKind::Hexacopter,
             // Safety keys
-            "max_altitude"  => TokenKind::MaxAltitude,
-            "min_altitude"  => TokenKind::MinAltitude,
-            "max_speed"     => TokenKind::MaxSpeed,
-            "geofence"      => TokenKind::Geofence,
+            "max_altitude" => TokenKind::MaxAltitude,
+            "min_altitude" => TokenKind::MinAltitude,
+            "max_speed" => TokenKind::MaxSpeed,
+            "geofence" => TokenKind::Geofence,
             "battery_reserve" => TokenKind::BatteryReserve,
-            "failsafe"      => TokenKind::Failsafe,
+            "failsafe" => TokenKind::Failsafe,
             // Flight keys
             "cruise_altitude" => TokenKind::CruiseAltitude,
-            "cruise_speed"  => TokenKind::CruiseSpeed,
+            "cruise_speed" => TokenKind::CruiseSpeed,
             // Param keys
-            "lat"           => TokenKind::Lat,
-            "lon"           => TokenKind::Lon,
-            "alt"           => TokenKind::Alt,
-            "altitude"      => TokenKind::Altitude,
-            "duration"      => TokenKind::Duration,
-            "action"        => TokenKind::Action,
-            "resolution"    => TokenKind::Resolution,
+            "lat" => TokenKind::Lat,
+            "lon" => TokenKind::Lon,
+            "alt" => TokenKind::Alt,
+            "altitude" => TokenKind::Altitude,
+            "duration" => TokenKind::Duration,
+            "action" => TokenKind::Action,
+            "resolution" => TokenKind::Resolution,
             // State / trigger conditions
-            "battery"           => TokenKind::Battery,
-            "wind"              => TokenKind::Wind,
+            "battery" => TokenKind::Battery,
+            "wind" => TokenKind::Wind,
             "obstacle_detected" => TokenKind::ObstacleDetected,
             // Reactive trigger
-            "on"                => TokenKind::On,
-            "and"               => TokenKind::And,
-            "or"                => TokenKind::Or,
+            "on" => TokenKind::On,
+            "and" => TokenKind::And,
+            "or" => TokenKind::Or,
             // Sensor bindings
-            "sensor"            => TokenKind::Sensor,
-            "from"              => TokenKind::From,
+            "sensor" => TokenKind::Sensor,
+            "from" => TokenKind::From,
             // Temporal condition
-            "for"               => TokenKind::For,
+            "for" => TokenKind::For,
             // Booleans
-            "true"          => TokenKind::Bool(true),
-            "false"         => TokenKind::Bool(false),
+            "true" => TokenKind::Bool(true),
+            "false" => TokenKind::Bool(false),
             // Catch-all
-            _               => TokenKind::Ident(s),
+            _ => TokenKind::Ident(s),
         }
     }
 }

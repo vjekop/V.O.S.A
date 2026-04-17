@@ -2,8 +2,7 @@ use crate::error::VosaError;
 use crate::parser::ast::*;
 use crate::runtime::ExecutionReport;
 use ros2_client::{
-    Context, Node, NodeOptions, Publisher,
-    Name, NodeName, MessageTypeName, DEFAULT_PUBLISHER_QOS,
+    Context, MessageTypeName, Name, Node, NodeName, NodeOptions, Publisher, DEFAULT_PUBLISHER_QOS,
 };
 use serde::{Deserialize, Serialize};
 
@@ -130,11 +129,13 @@ impl Ros2Bridge {
                 MessageTypeName::new("mavros_msgs", "GlobalPositionTarget"),
                 &DEFAULT_PUBLISHER_QOS,
             )
-            .map_err(|e| VosaError::RuntimeError(format!("Failed to create waypoint topic: {e:?}")))?;
+            .map_err(|e| {
+                VosaError::RuntimeError(format!("Failed to create waypoint topic: {e:?}"))
+            })?;
 
-        let wp_pub = node
-            .create_publisher(&wp_topic, None)
-            .map_err(|e| VosaError::RuntimeError(format!("Failed to create waypoint publisher: {e:?}")))?;
+        let wp_pub = node.create_publisher(&wp_topic, None).map_err(|e| {
+            VosaError::RuntimeError(format!("Failed to create waypoint publisher: {e:?}"))
+        })?;
 
         // /mavros/vosa/cmd  —  high-level command strings
         let cmd_topic = node
@@ -143,17 +144,25 @@ impl Ros2Bridge {
                 MessageTypeName::new("std_msgs", "String"),
                 &DEFAULT_PUBLISHER_QOS,
             )
-            .map_err(|e| VosaError::RuntimeError(format!("Failed to create command topic: {e:?}")))?;
+            .map_err(|e| {
+                VosaError::RuntimeError(format!("Failed to create command topic: {e:?}"))
+            })?;
 
-        let cmd_pub = node
-            .create_publisher(&cmd_topic, None)
-            .map_err(|e| VosaError::RuntimeError(format!("Failed to create command publisher: {e:?}")))?;
+        let cmd_pub = node.create_publisher(&cmd_topic, None).map_err(|e| {
+            VosaError::RuntimeError(format!("Failed to create command publisher: {e:?}"))
+        })?;
 
         println!("[ROS 2] Publishing waypoints  → /mavros/setpoint_raw/global");
         println!("[ROS 2] Publishing commands   → /mavros/vosa/cmd");
-        println!("[ROS 2] Note: arm + set mode via 'ros2 service call' before running (see 'vosa docs')");
+        println!(
+            "[ROS 2] Note: arm + set mode via 'ros2 service call' before running (see 'vosa docs')"
+        );
 
-        Ok(Ros2Bridge { _node: node, wp_pub, cmd_pub })
+        Ok(Ros2Bridge {
+            _node: node,
+            wp_pub,
+            cmd_pub,
+        })
     }
 
     pub fn execute(&mut self, mission: &Mission) -> Result<ExecutionReport, VosaError> {
@@ -180,7 +189,9 @@ impl Ros2Bridge {
             self.execute_statement(&stmt, &mut log)?;
         }
 
-        println!("[ROS 2] All topics published. Verify execution via 'ros2 topic echo /mavros/state'");
+        println!(
+            "[ROS 2] All topics published. Verify execution via 'ros2 topic echo /mavros/state'"
+        );
         Ok(report)
     }
 
@@ -228,7 +239,9 @@ impl Ros2Bridge {
 
             Command::Land => {
                 log("→ /mavros/vosa/cmd  \"LAND\"".into());
-                let _ = self.cmd_pub.publish(StringMsg { data: "LAND".into() });
+                let _ = self.cmd_pub.publish(StringMsg {
+                    data: "LAND".into(),
+                });
             }
 
             Command::Hover { duration } => {
@@ -243,14 +256,19 @@ impl Ros2Bridge {
                         stamp: TimeStamp { sec: 0, nanosec: 0 },
                         frame_id: "map".into(),
                     },
-                    coordinate_frame: 6, // MAV_FRAME_GLOBAL_RELATIVE_ALT_INT
+                    coordinate_frame: 6,    // MAV_FRAME_GLOBAL_RELATIVE_ALT_INT
                     type_mask: 0b1111_1000, // position-only, ignore vel/acc/yaw
                     latitude: *lat,
                     longitude: *lon,
                     altitude: *alt as f32,
-                    vx: 0.0, vy: 0.0, vz: 0.0,
-                    afx: 0.0, afy: 0.0, afz: 0.0,
-                    yaw: 0.0, yaw_rate: 0.0,
+                    vx: 0.0,
+                    vy: 0.0,
+                    vz: 0.0,
+                    afx: 0.0,
+                    afy: 0.0,
+                    afz: 0.0,
+                    yaw: 0.0,
+                    yaw_rate: 0.0,
                 };
                 log(format!(
                     "→ /mavros/setpoint_raw/global  ({lat:.5}°, {lon:.5}°, {alt}m)"
@@ -260,17 +278,17 @@ impl Ros2Bridge {
 
             Command::ReturnHome => {
                 log("→ /mavros/vosa/cmd  \"RETURN_TO_LAUNCH\"".into());
-                let _ = self
-                    .cmd_pub
-                    .publish(StringMsg { data: "RETURN_TO_LAUNCH".into() });
+                let _ = self.cmd_pub.publish(StringMsg {
+                    data: "RETURN_TO_LAUNCH".into(),
+                });
             }
 
             Command::Camera { action, resolution } => {
                 let res = resolution.as_deref().unwrap_or("default");
                 let msg = match action {
                     CameraAction::Record => format!("CAMERA_RECORD res={res}"),
-                    CameraAction::Photo  => format!("CAMERA_PHOTO  res={res}"),
-                    CameraAction::Stop   => "CAMERA_STOP".into(),
+                    CameraAction::Photo => format!("CAMERA_PHOTO  res={res}"),
+                    CameraAction::Stop => "CAMERA_STOP".into(),
                 };
                 log(format!("→ /mavros/vosa/cmd  \"{msg}\""));
                 let _ = self.cmd_pub.publish(StringMsg { data: msg });
