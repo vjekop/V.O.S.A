@@ -82,10 +82,23 @@ pub struct Runtime {
     sim_time_s: f64,
     /// All registered `on` triggers accumulated during sequence execution
     triggers: Vec<ActiveTrigger>,
+    /// Fixed sensor overrides supplied via `--inject`. Keys: "battery", "wind",
+    /// "obstacle", or any custom sensor name. Values stay constant — no drain/escalation.
+    injected: HashMap<String, f64>,
 }
 
 impl Runtime {
     pub fn new() -> Self {
+        Self::with_injection(HashMap::new())
+    }
+
+    /// Create a runtime with fixed sensor overrides for simulation testing.
+    /// Injected values remain constant throughout execution (no battery drain,
+    /// no wind escalation) so you can test specific trigger conditions in isolation.
+    pub fn with_injection(injected: HashMap<String, f64>) -> Self {
+        let battery = injected.get("battery").copied().unwrap_or(100.0);
+        let wind    = injected.get("wind").copied().unwrap_or(3.0);
+        let obstacle = injected.get("obstacle").map(|v| *v != 0.0).unwrap_or(false);
         Runtime {
             steps: Vec::new(),
             current_lat: 0.0,
@@ -93,13 +106,14 @@ impl Runtime {
             current_alt: 0.0,
             total_distance: 0.0,
             max_alt: 0.0,
-            battery_percent: 100.0,
-            wind_speed_ms: 3.0,
+            battery_percent: battery,
+            wind_speed_ms: wind,
             waypoints_visited: 0,
-            obstacle_detected: false,
+            obstacle_detected: obstacle,
             sensor_values: HashMap::new(),
             sim_time_s: 0.0,
             triggers: Vec::new(),
+            injected,
         }
     }
 
@@ -138,12 +152,18 @@ impl Runtime {
 
         self.log(format!("[ENV] Initial wind: {:.1}m/s", self.wind_speed_ms));
 
-        // Register declared sensors (all start at 0.0 in simulation)
+        // Register declared sensors; injected values override the 0.0 default
         for binding in &mission.sensors {
-            self.sensor_values.insert(binding.name.clone(), 0.0);
+            let value = self.injected.get(&binding.name).copied().unwrap_or(0.0);
+            self.sensor_values.insert(binding.name.clone(), value);
+            let src = if self.injected.contains_key(&binding.name) {
+                format!("injected: {value}")
+            } else {
+                format!("simulation: 0.0")
+            };
             self.log(format!(
-                "[SENSOR] Registered: {} → {}.{} (simulation: 0.0)",
-                binding.name, binding.message, binding.field
+                "[SENSOR] Registered: {} → {}.{} ({})",
+                binding.name, binding.message, binding.field, src
             ));
         }
 
@@ -364,6 +384,9 @@ impl Runtime {
     }
 
     fn drain_battery(&mut self, distance_m: f64) {
+        if self.injected.contains_key("battery") {
+            return; // injected battery is held constant
+        }
         self.battery_percent -= distance_m / 500.0;
         if self.battery_percent < 0.0 {
             self.battery_percent = 0.0;
@@ -414,6 +437,9 @@ impl Runtime {
 
     /// Simulate wind increasing with flight time (1 m/s per 3 waypoints).
     fn simulate_wind(&mut self) {
+        if self.injected.contains_key("wind") {
+            return; // injected wind is held constant
+        }
         self.wind_speed_ms = 3.0 + (self.waypoints_visited / 3) as f64;
     }
 }
