@@ -751,10 +751,12 @@ fn command_to_mav_item(cmd: &Command) -> Option<MavItem> {
         Command::Hover { duration } => MavItem::LoiterTime { duration: *duration as f32 },
         Command::Land => MavItem::Land,
         Command::ReturnHome => MavItem::ReturnHome,
-        Command::Camera { action, .. } => match action {
-            CameraAction::Record => MavItem::CameraStartCapture,
-            CameraAction::Stop => MavItem::CameraStopCapture,
-            CameraAction::Photo => MavItem::CameraPhoto,
-        },
+        // Camera commands are skipped in MAVLink mode — PX4 SITL rejects
+        // IMAGE/VIDEO_CAPTURE on vehicles without a camera payload.
+        // On real hardware with a camera-equipped vehicle, remove this guard.
+        Command::Camera { action, .. } => {
+            println!("[MAVLink] Skipping camera({action:?}) — no camera payload on this vehicle");
+            return None;
+        }
     })
 }
