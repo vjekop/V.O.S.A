@@ -1,0 +1,52 @@
+// sensor_mission.vosa
+// Demonstrates VOSA generic sensor bindings.
+//
+// Declares named sensors from MAVLink telemetry fields, then uses them
+// in reactive triggers. On hardware, values come from live telemetry.
+// In simulation, use --inject to test at specific values:
+//
+//   vosa run examples/sensor_mission.vosa --inject roll_angle=0.5
+//   vosa run examples/sensor_mission.vosa --inject gps_hdop=600
+
+mission "sensor_demo" {
+    vehicle: Quadcopter
+
+    safety {
+        max_altitude:    100m
+        max_speed:       15m/s
+        battery_reserve: 15%
+        failsafe:        return_home
+    }
+
+    flight {
+        cruise_altitude: 40m
+        cruise_speed:    8m/s
+    }
+
+    sensor roll_angle from ATTITUDE.roll
+    sensor gps_hdop   from GPS_RAW_INT.eph
+
+    sequence {
+        on roll_angle > 0.45 {
+            return_home()
+            land()
+        }
+
+        on gps_hdop > 500 {
+            return_home()
+            land()
+        }
+
+        on battery < 20% {
+            return_home()
+            land()
+        }
+
+        takeoff(40m)
+        waypoint(lat: 47.398171, lon: 8.545594, alt: 40m)
+        waypoint(lat: 47.398071, lon: 8.545794, alt: 40m)
+        waypoint(lat: 47.397971, lon: 8.545594, alt: 40m)
+        return_home()
+        land()
+    }
+}

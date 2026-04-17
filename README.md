@@ -227,6 +227,7 @@ Sensor names are validated at compile time (`vosa check`). On real hardware, val
 | `examples/photo_survey.vosa` | Multi-waypoint photographic transect |
 | `examples/parallel_survey.vosa` | Parallel multi-drone blocks |
 | `examples/reactive_mission.vosa` | Full reactive mission — battery, wind, obstacle triggers |
+| `examples/sensor_mission.vosa` | Generic sensor bindings from MAVLink telemetry |
 
 ---
 
@@ -261,8 +262,11 @@ Runtime (sim) or Hardware Bridge
 - [x] Live telemetry loop feeding reactive triggers
 - [x] ROS 2 / MAVROS topic bridge
 - [x] Gazebo + PX4 SITL integration
-- [ ] Parallel execution (concurrent multi-drone scheduling)
-- [ ] LSP / editor support
+- [x] Parallel execution (`parallel { ... }` blocks)
+- [x] Generic sensor bindings (`sensor X from MESSAGE.field`)
+- [x] Temporal trigger conditions (`on X for <duration>`)
+- [x] Sensor injection for simulation testing (`--inject battery=18,wind=15`)
+- [ ] LSP / editor support (syntax highlighting, inline validation)
 
 ---
 
