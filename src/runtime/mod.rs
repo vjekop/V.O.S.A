@@ -380,6 +380,43 @@ impl Runtime {
                 ));
             }
 
+            Command::WaypointRelative { north, east, alt } => {
+                // Convert relative offset to absolute using home as origin (0.0, 0.0 in sim)
+                let (lat, lon) = offset_to_latlon(0.0, 0.0, *north, *east);
+
+                if let Some(safety) = safety {
+                    if let Some(Geofence::Circle { center, radius }) = &safety.geofence {
+                        let (fence_lat, fence_lon) = match center {
+                            GeoCenter::Home => (0.0_f64, 0.0_f64),
+                            GeoCenter::Coord { lat, lon } => (*lat, *lon),
+                        };
+                        let dist = haversine(fence_lat, fence_lon, lat, lon);
+                        if dist > *radius {
+                            return Err(VosaError::SafetyViolation(format!(
+                                "waypoint(north: {north}m, east: {east}m) is {dist:.0}m from geofence center — exceeds radius of {radius}m"
+                            )));
+                        }
+                    }
+                }
+
+                let dist = haversine(self.current_lat, self.current_lon, lat, lon);
+                self.sim_time_s += dist / 10.0;
+                self.drain_battery(dist);
+                self.total_distance += dist;
+                self.current_lat = lat;
+                self.current_lon = lon;
+                self.current_alt = *alt;
+                self.check_battery_failsafe(safety)?;
+                self.max_alt = self.max_alt.max(*alt);
+                self.waypoints_visited += 1;
+                self.simulate_wind();
+                self.log(format!(
+                    "[WAYPOINT] → N+{north}m E+{east}m alt {alt}m  [{dist:.0}m leg]  \
+                     [batt {:.1}%]  [wind {:.1}m/s]",
+                    self.battery_percent, self.wind_speed_ms
+                ));
+            }
+
             Command::ReturnHome => {
                 let dist = haversine(self.current_lat, self.current_lon, 0.0, 0.0);
                 self.sim_time_s += dist / 10.0;
@@ -577,6 +614,15 @@ pub fn haversine(lat1: f64, lon1: f64, lat2: f64, lon2: f64) -> f64 {
         + lat1.to_radians().cos() * lat2.to_radians().cos() * (dlon / 2.0).sin().powi(2);
     let c = 2.0 * a.sqrt().atan2((1.0 - a).sqrt());
     R * c
+}
+
+/// Convert a north/east offset (metres) from a GPS origin into absolute lat/lon.
+/// Uses a local tangent plane approximation — accurate to <0.1% for offsets under 50 km.
+pub fn offset_to_latlon(origin_lat: f64, origin_lon: f64, north_m: f64, east_m: f64) -> (f64, f64) {
+    const METERS_PER_DEG_LAT: f64 = 111_111.0;
+    let lat = origin_lat + north_m / METERS_PER_DEG_LAT;
+    let lon = origin_lon + east_m / (METERS_PER_DEG_LAT * origin_lat.to_radians().cos());
+    (lat, lon)
 }
 
 // ── Unit tests ────────────────────────────────────────────────────────────────

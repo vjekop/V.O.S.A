@@ -65,20 +65,22 @@ mission "reactive_survey" {
     takeoff(60m)
 
     // Outbound survey legs — triggers are evaluated after each waypoint.
-    waypoint(lat: 37.7750, lon: -122.4195, alt: 60m)
-    waypoint(lat: 37.7760, lon: -122.4195, alt: 60m)
-    waypoint(lat: 37.7770, lon: -122.4195, alt: 60m)
-    waypoint(lat: 37.7780, lon: -122.4195, alt: 60m)
-    waypoint(lat: 37.7790, lon: -122.4195, alt: 60m)
+    // All waypoints are relative to the launch position so this mission
+    // works anywhere without hardcoded GPS coordinates.
+    waypoint(north: 0m,   east: 0m,   alt: 60m)
+    waypoint(north: 100m, east: 0m,   alt: 60m)
+    waypoint(north: 200m, east: 0m,   alt: 60m)
+    waypoint(north: 300m, east: 0m,   alt: 60m)
+    waypoint(north: 400m, east: 0m,   alt: 60m)
 
     camera(action: photo, resolution: "4K")
 
     // Cross-legs
-    waypoint(lat: 37.7790, lon: -122.4185, alt: 60m)
-    waypoint(lat: 37.7780, lon: -122.4185, alt: 60m)
-    waypoint(lat: 37.7770, lon: -122.4185, alt: 60m)
-    waypoint(lat: 37.7760, lon: -122.4185, alt: 60m)
-    waypoint(lat: 37.7750, lon: -122.4185, alt: 60m)
+    waypoint(north: 400m, east: 100m, alt: 60m)
+    waypoint(north: 300m, east: 100m, alt: 60m)
+    waypoint(north: 200m, east: 100m, alt: 60m)
+    waypoint(north: 100m, east: 100m, alt: 60m)
+    waypoint(north: 0m,   east: 100m, alt: 60m)
 
     camera(action: photo, resolution: "4K")
 

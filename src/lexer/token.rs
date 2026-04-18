@@ -100,6 +100,10 @@ pub enum TokenKind {
     Duration,
     Action,
     Resolution,
+    /// `north` — relative northward offset in metres
+    North,
+    /// `east` — relative eastward offset in metres
+    East,
 
     // ── State variables / trigger conditions ─────────────────────────────────
     /// `battery` — current battery level (%)

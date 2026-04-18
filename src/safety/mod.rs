@@ -105,6 +105,13 @@ impl SafetySandbox {
                     &format!("waypoint({lat:.4}, {lon:.4}) altitude"),
                 )?;
             }
+            Command::WaypointRelative { north, east, alt } => {
+                self.check_altitude(
+                    *alt,
+                    safety,
+                    &format!("waypoint(north: {north}m, east: {east}m) altitude"),
+                )?;
+            }
             Command::Hover { duration } => {
                 if *duration <= 0.0 {
                     return Err(VosaError::SafetyViolation(
@@ -171,14 +178,27 @@ impl SafetySandbox {
     ) -> Result<(), VosaError> {
         match stmt {
             Statement::Command(cmd) => {
-                if let Command::Waypoint { lat, lon, .. } = cmd {
-                    let dist = haversine_m(clat, clon, *lat, *lon);
-                    if dist > radius {
-                        return Err(VosaError::SafetyViolation(format!(
-                            "waypoint({lat:.5}, {lon:.5}) is {dist:.0}m from geofence center \
-                             but geofence radius is only {radius:.0}m"
-                        )));
+                match cmd {
+                    Command::Waypoint { lat, lon, .. } => {
+                        let dist = haversine_m(clat, clon, *lat, *lon);
+                        if dist > radius {
+                            return Err(VosaError::SafetyViolation(format!(
+                                "waypoint({lat:.5}, {lon:.5}) is {dist:.0}m from geofence center \
+                                 but geofence radius is only {radius:.0}m"
+                            )));
+                        }
                     }
+                    Command::WaypointRelative { north, east, .. } => {
+                        // Euclidean distance from home — valid for radii up to ~50 km
+                        let dist = (north * north + east * east).sqrt();
+                        if dist > radius {
+                            return Err(VosaError::SafetyViolation(format!(
+                                "waypoint(north: {north}m, east: {east}m) is {dist:.0}m from home \
+                                 but geofence radius is only {radius:.0}m"
+                            )));
+                        }
+                    }
+                    _ => {}
                 }
             }
             Statement::Repeat { body, .. }

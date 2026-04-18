@@ -183,8 +183,10 @@ pub enum Command {
     Land,
     /// Hold current position for `duration` seconds
     Hover { duration: f64 },
-    /// Fly to GPS coordinate at a given altitude
+    /// Fly to absolute GPS coordinate at a given altitude
     Waypoint { lat: f64, lon: f64, alt: f64 },
+    /// Fly to a position relative to home: north/east offsets in metres
+    WaypointRelative { north: f64, east: f64, alt: f64 },
     /// Fly back to the home / launch position
     ReturnHome,
     /// Control the onboard camera

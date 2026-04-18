@@ -597,11 +597,14 @@ impl Parser {
     }
 
     /// `waypoint(lat: 38.897, lon: -77.036, alt: 50m)`
+    /// `waypoint(north: 100m, east: 50m, alt: 60m)`
     fn parse_waypoint(&mut self) -> Result<Command, VosaError> {
         self.expect(&TokenKind::LParen)?;
 
         let mut lat: Option<f64> = None;
         let mut lon: Option<f64> = None;
+        let mut north: Option<f64> = None;
+        let mut east: Option<f64> = None;
         let mut alt: Option<f64> = None;
 
         loop {
@@ -627,6 +630,22 @@ impl Parser {
                         self.advance();
                     }
                 }
+                TokenKind::North => {
+                    self.advance();
+                    self.expect(&TokenKind::Colon)?;
+                    north = Some(self.expect_number()?);
+                    if self.peek() == &TokenKind::Comma {
+                        self.advance();
+                    }
+                }
+                TokenKind::East => {
+                    self.advance();
+                    self.expect(&TokenKind::Colon)?;
+                    east = Some(self.expect_number()?);
+                    if self.peek() == &TokenKind::Comma {
+                        self.advance();
+                    }
+                }
                 TokenKind::Alt | TokenKind::Altitude => {
                     self.advance();
                     self.expect(&TokenKind::Colon)?;
@@ -641,11 +660,18 @@ impl Parser {
             }
         }
 
-        Ok(Command::Waypoint {
-            lat: lat.ok_or_else(|| self.parse_err("waypoint requires 'lat'"))?,
-            lon: lon.ok_or_else(|| self.parse_err("waypoint requires 'lon'"))?,
-            alt: alt.ok_or_else(|| self.parse_err("waypoint requires 'alt'"))?,
-        })
+        let alt = alt.ok_or_else(|| self.parse_err("waypoint requires 'alt'"))?;
+
+        match (lat, lon, north, east) {
+            (Some(lat), Some(lon), None, None) => Ok(Command::Waypoint { lat, lon, alt }),
+            (None, None, Some(north), Some(east)) => Ok(Command::WaypointRelative { north, east, alt }),
+            (None, None, None, None) => Err(self.parse_err(
+                "waypoint requires either 'lat'/'lon' (absolute) or 'north'/'east' (relative to home)",
+            )),
+            _ => Err(self.parse_err(
+                "waypoint cannot mix absolute (lat/lon) and relative (north/east) parameters",
+            )),
+        }
     }
 
     /// `camera(action: record, resolution: 4K)`

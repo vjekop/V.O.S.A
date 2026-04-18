@@ -298,10 +298,10 @@ impl MavlinkBridge {
         println!("[MAVLink] Mode: AUTO.MISSION");
 
         // ── 5. Build and upload mission ───────────────────────────────────────
-        let mut items: Vec<MavItem> = Vec::new();
-        collect_items(&mission.sequence.statements, &mut items);
         let home_lat = telemetry.home_lat;
         let home_lon = telemetry.home_lon;
+        let mut items: Vec<MavItem> = Vec::new();
+        collect_items(&mission.sequence.statements, &mut items, home_lat, home_lon);
         println!("[MAVLink] Uploading {} mission items ...", items.len());
         upload_mission(&vehicle, &mut telemetry, &items, home_lat, home_lon)?;
         println!("[MAVLink] Mission upload complete");
@@ -849,21 +849,21 @@ fn upload_mission<C: MavConnection<MavMessage>>(
 // ── AST helpers ───────────────────────────────────────────────────────────────
 
 /// Flatten VOSA statements into ordered MAVLink mission items.
-fn collect_items(stmts: &[Statement], items: &mut Vec<MavItem>) {
+fn collect_items(stmts: &[Statement], items: &mut Vec<MavItem>, home_lat: f64, home_lon: f64) {
     for stmt in stmts {
         match stmt {
             Statement::Command(cmd) => {
-                if let Some(item) = command_to_mav_item(cmd) {
+                if let Some(item) = command_to_mav_item(cmd, home_lat, home_lon) {
                     items.push(item);
                 }
             }
             Statement::Repeat { count, body } => {
                 for _ in 0..*count {
-                    collect_items(&body.statements, items);
+                    collect_items(&body.statements, items, home_lat, home_lon);
                 }
             }
             Statement::IfBattery { body, .. } | Statement::Parallel { body } => {
-                collect_items(&body.statements, items);
+                collect_items(&body.statements, items, home_lat, home_lon);
             }
             Statement::OnCondition { condition, .. } => {
                 println!(
@@ -1105,7 +1105,7 @@ impl MavItem {
     }
 }
 
-fn command_to_mav_item(cmd: &Command) -> Option<MavItem> {
+fn command_to_mav_item(cmd: &Command, home_lat: f64, home_lon: f64) -> Option<MavItem> {
     Some(match cmd {
         Command::Takeoff { altitude } => MavItem::Takeoff {
             altitude: *altitude as f32,
@@ -1115,6 +1115,10 @@ fn command_to_mav_item(cmd: &Command) -> Option<MavItem> {
             lon: *lon,
             alt: *alt as f32,
         },
+        Command::WaypointRelative { north, east, alt } => {
+            let (lat, lon) = crate::runtime::offset_to_latlon(home_lat, home_lon, *north, *east);
+            MavItem::Waypoint { lat, lon, alt: *alt as f32 }
+        }
         Command::Hover { duration } => MavItem::LoiterTime {
             duration: *duration as f32,
         },

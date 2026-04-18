@@ -277,6 +277,8 @@ impl Lexer {
             "duration" => TokenKind::Duration,
             "action" => TokenKind::Action,
             "resolution" => TokenKind::Resolution,
+            "north" => TokenKind::North,
+            "east" => TokenKind::East,
             // State / trigger conditions
             "battery" => TokenKind::Battery,
             "wind" => TokenKind::Wind,
