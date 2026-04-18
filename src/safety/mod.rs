@@ -506,9 +506,11 @@ fn conditions_can_overlap(a: &TriggerCondition, b: &TriggerCondition) -> bool {
             | (Operator::GreaterThan, Operator::GreaterThan) => (t_a - t_b).abs() < f64::EPSILON,
             _ => false,
         },
-        // Battery and wind are independent — can overlap
+        // Battery and wind monitor independent physical quantities — different responses
+        // to each are intentional (e.g. abort on low battery, hover on high wind).
+        // Priority is handled at runtime by whichever trigger fires first.
         (TriggerCondition::Battery { .. }, TriggerCondition::Wind { .. })
-        | (TriggerCondition::Wind { .. }, TriggerCondition::Battery { .. }) => true,
+        | (TriggerCondition::Wind { .. }, TriggerCondition::Battery { .. }) => false,
         // Compound conditions — conservatively assume they can overlap
         _ => true,
     }
