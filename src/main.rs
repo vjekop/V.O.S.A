@@ -43,6 +43,21 @@ enum Command {
         /// Path to the .vosa mission file
         file: PathBuf,
     },
+    /// Start VOSA as a safety gateway — listens for waypoint commands from an autonomous explorer
+    /// and validates each one before forwarding to the drone via MAVLink.
+    ///
+    /// Protocol: send one command per line, e.g. "waypoint north=50.0 east=10.0 alt=30.0"
+    /// VOSA replies "ok" or "error: <reason>" for each command.
+    Serve {
+        /// Path to the .vosa mission file (used for safety context — geofence, altitude limits, etc.)
+        file: PathBuf,
+        /// MAVLink connection string
+        #[arg(long, value_name = "CONN_STR")]
+        mavlink: String,
+        /// TCP port to listen on for explorer connections (default: 7777)
+        #[arg(long, default_value = "7777")]
+        port: u16,
+    },
     /// Print the VOSA language reference
     Docs,
 }
@@ -59,6 +74,7 @@ fn main() {
             inject,
         } => cmd_run(file, ast, mavlink, ros2, inject),
         Command::Check { file } => cmd_check(file),
+        Command::Serve { file, mavlink, port } => cmd_serve(file, mavlink, port),
         Command::Docs => cmd_docs(),
     }
 }
@@ -198,6 +214,108 @@ fn cmd_check(file: PathBuf) {
             std::process::exit(1);
         }
     }
+}
+
+fn cmd_serve(file: PathBuf, mavlink_conn: String, port: u16) {
+    use std::io::{BufRead, BufReader, Write};
+    use std::net::TcpListener;
+
+    println!("{}", banner());
+    let src = read_file(&file);
+
+    let mission = match vosa::parse(&src) {
+        Ok(m) => m,
+        Err(e) => {
+            eprintln!("{} {e}", "parse error:".red().bold());
+            std::process::exit(1);
+        }
+    };
+
+    let sandbox = vosa::safety::SafetySandbox::new();
+    if let Err(e) = sandbox.validate(&mission) {
+        eprintln!("{} {e}", "safety violation:".yellow().bold());
+        std::process::exit(2);
+    }
+    println!("{}", "Safety context loaded.".green().bold());
+    println!("MAVLink target: {}", mavlink_conn.bold());
+
+    let addr = format!("0.0.0.0:{port}");
+    let listener = TcpListener::bind(&addr).expect("failed to bind TCP port");
+    println!("{} {}", "Listening for explorer on".green().bold(), addr.bold());
+    println!("Protocol: send 'waypoint north=<m> east=<m> alt=<m>' per line");
+
+    for stream in listener.incoming() {
+        let Ok(stream) = stream else { continue };
+        let peer = stream.peer_addr().map(|a| a.to_string()).unwrap_or_default();
+        println!("[serve] Explorer connected from {peer}");
+
+        let mut reader = BufReader::new(stream.try_clone().unwrap());
+        let mut writer = stream;
+        let mut line = String::new();
+
+        loop {
+            line.clear();
+            match reader.read_line(&mut line) {
+                Ok(0) | Err(_) => {
+                    println!("[serve] Explorer disconnected");
+                    break;
+                }
+                Ok(_) => {}
+            }
+
+            let line = line.trim();
+            if line.is_empty() {
+                continue;
+            }
+
+            match parse_serve_command(line) {
+                Ok((north, east, alt)) => {
+                    let cmd = vosa::parser::ast::Command::WaypointRelative { north, east, alt };
+                    match sandbox.validate_command(&cmd, &mission.safety) {
+                        Ok(()) => {
+                            println!("[serve] ✓ waypoint N+{north}m E+{east}m alt {alt}m — safe, forwarding to PX4 (phase 2)");
+                            let _ = writeln!(writer, "ok");
+                        }
+                        Err(e) => {
+                            println!("[serve] ✗ safety rejected: {e}");
+                            let _ = writeln!(writer, "error: {e}");
+                        }
+                    }
+                }
+                Err(e) => {
+                    let _ = writeln!(writer, "error: {e}");
+                }
+            }
+        }
+    }
+}
+
+fn parse_serve_command(line: &str) -> Result<(f64, f64, f64), String> {
+    if !line.starts_with("waypoint") {
+        return Err(format!("unknown command: {line}"));
+    }
+    let mut north = None;
+    let mut east = None;
+    let mut alt = None;
+    for part in line.split_whitespace().skip(1) {
+        let mut kv = part.splitn(2, '=');
+        let key = kv.next().unwrap_or("");
+        let val: f64 = kv
+            .next()
+            .and_then(|v| v.parse().ok())
+            .ok_or_else(|| format!("bad value for '{key}'"))?;
+        match key {
+            "north" => north = Some(val),
+            "east" => east = Some(val),
+            "alt" => alt = Some(val),
+            _ => return Err(format!("unknown param: {key}")),
+        }
+    }
+    Ok((
+        north.ok_or("missing north")?,
+        east.ok_or("missing east")?,
+        alt.ok_or("missing alt")?,
+    ))
 }
 
 fn cmd_docs() {

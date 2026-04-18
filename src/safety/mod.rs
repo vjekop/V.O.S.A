@@ -25,6 +25,30 @@ impl SafetySandbox {
         SafetySandbox
     }
 
+    /// Validate a single command against a safety block — used by the serve API
+    /// to check dynamically generated waypoints from an autonomous explorer.
+    pub fn validate_command(&self, cmd: &Command, safety: &Option<SafetyBlock>) -> Result<(), VosaError> {
+        let Some(safety) = safety else { return Ok(()) };
+        self.check_command(cmd, safety)?;
+        // Geofence check for relative waypoints
+        if let Command::WaypointRelative { north, east, .. } = cmd {
+            if let Some(crate::parser::ast::Geofence::Circle { center, radius }) = &safety.geofence {
+                let (clat, clon) = match center {
+                    crate::parser::ast::GeoCenter::Home => (0.0_f64, 0.0_f64),
+                    crate::parser::ast::GeoCenter::Coord { lat, lon } => (*lat, *lon),
+                };
+                let dist = (north * north + east * east).sqrt();
+                let fence_dist = (clat * clat + clon * clon).sqrt() + dist;
+                if fence_dist > *radius {
+                    return Err(VosaError::SafetyViolation(format!(
+                        "waypoint(north: {north}m, east: {east}m) is {dist:.0}m from home but geofence radius is only {radius:.0}m"
+                    )));
+                }
+            }
+        }
+        Ok(())
+    }
+
     /// Run every static safety check. Returns `Ok(())` only if the mission is clean.
     pub fn validate(&self, mission: &Mission) -> Result<(), VosaError> {
         let safety = match &mission.safety {
