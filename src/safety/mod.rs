@@ -494,9 +494,12 @@ fn conditions_can_overlap(a: &TriggerCondition, b: &TriggerCondition) -> bool {
                 _ => false,
             }
         }
-        // obstacle_detected and custom sensors can coincide with anything
-        (TriggerCondition::ObstacleDetected, _) | (_, TriggerCondition::ObstacleDetected) => true,
-        (TriggerCondition::Custom { .. }, _) | (_, TriggerCondition::Custom { .. }) => true,
+        // obstacle_detected and custom sensors are independent of battery/wind —
+        // only flag overlap when two triggers share the same sensor type.
+        (TriggerCondition::ObstacleDetected, TriggerCondition::ObstacleDetected) => true,
+        (TriggerCondition::ObstacleDetected, _) | (_, TriggerCondition::ObstacleDetected) => false,
+        (TriggerCondition::Custom { name: a, .. }, TriggerCondition::Custom { name: b, .. }) => a == b,
+        (TriggerCondition::Custom { .. }, _) | (_, TriggerCondition::Custom { .. }) => false,
         // Two wind thresholds — same tiered logic as battery
         (
             TriggerCondition::Wind { operator: op_a, threshold_ms: t_a },
@@ -872,15 +875,13 @@ mod tests {
 
     #[test]
     fn conflicting_triggers_rtl_vs_land_is_violation() {
-        // One trigger says RTL, another says Land — these conflict when both can fire
+        // Two obstacle_detected triggers with contradictory actions — genuine conflict
+        // (same sensor, same threshold, different commands).
         let m = mission_with_safety(
             SafetyBlock::default(),
             vec![
                 Statement::OnCondition {
-                    condition: TriggerCondition::Battery {
-                        operator: Operator::LessThan,
-                        threshold_percent: 20.0,
-                    },
+                    condition: TriggerCondition::ObstacleDetected,
                     duration_s: None,
                     body: Sequence {
                         statements: vec![Statement::Command(Command::ReturnHome)],
