@@ -475,33 +475,37 @@ fn intents_conflict(a: &TriggerIntent, b: &TriggerIntent) -> bool {
 }
 
 /// Returns true if two conditions can possibly be true at the same time.
+///
+/// Tiered thresholds (e.g. `battery < 40%` warning + `battery < 20%` abort) are
+/// intentional and fire independently via rising-edge semantics — they are NOT
+/// treated as overlapping. Only identical thresholds with the same operator can
+/// fire simultaneously and are flagged for conflict checking.
 fn conditions_can_overlap(a: &TriggerCondition, b: &TriggerCondition) -> bool {
     match (a, b) {
-        // Two battery thresholds with the same operator and different values:
-        // the lower threshold is always true when the higher one is (LessThan case).
-        // e.g. battery < 20% and battery < 40% — both true below 20%.
         (
-            TriggerCondition::Battery { operator: op_a, .. },
-            TriggerCondition::Battery { operator: op_b, .. },
+            TriggerCondition::Battery { operator: op_a, threshold_percent: t_a },
+            TriggerCondition::Battery { operator: op_b, threshold_percent: t_b },
         ) => {
+            // Only truly ambiguous when both thresholds are identical — different
+            // thresholds are tiered (each fires once at its own crossing point).
             match (op_a, op_b) {
-                (Operator::LessThan, Operator::LessThan) => true, // both true below min(t_a, t_b)
-                (Operator::GreaterThan, Operator::GreaterThan) => true, // both true above max
-                _ => false, // < and > on battery can only overlap at the exact threshold
+                (Operator::LessThan, Operator::LessThan)
+                | (Operator::GreaterThan, Operator::GreaterThan) => (t_a - t_b).abs() < f64::EPSILON,
+                _ => false,
             }
         }
         // obstacle_detected and custom sensors can coincide with anything
         (TriggerCondition::ObstacleDetected, _) | (_, TriggerCondition::ObstacleDetected) => true,
         (TriggerCondition::Custom { .. }, _) | (_, TriggerCondition::Custom { .. }) => true,
-        // Two wind thresholds — same logic as battery
+        // Two wind thresholds — same tiered logic as battery
         (
-            TriggerCondition::Wind { operator: op_a, .. },
-            TriggerCondition::Wind { operator: op_b, .. },
-        ) => matches!(
-            (op_a, op_b),
+            TriggerCondition::Wind { operator: op_a, threshold_ms: t_a },
+            TriggerCondition::Wind { operator: op_b, threshold_ms: t_b },
+        ) => match (op_a, op_b) {
             (Operator::LessThan, Operator::LessThan)
-                | (Operator::GreaterThan, Operator::GreaterThan)
-        ),
+            | (Operator::GreaterThan, Operator::GreaterThan) => (t_a - t_b).abs() < f64::EPSILON,
+            _ => false,
+        },
         // Battery and wind are independent — can overlap
         (TriggerCondition::Battery { .. }, TriggerCondition::Wind { .. })
         | (TriggerCondition::Wind { .. }, TriggerCondition::Battery { .. }) => true,
