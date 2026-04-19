@@ -75,11 +75,9 @@ class VosaGateway:
 
 # ── Depth camera subscriber ───────────────────────────────────────────────────
 
-def on_point_cloud(msg_data: bytes):
+def on_point_cloud(msg: pc_msgs.PointCloudPacked):
     """Parse point cloud and find minimum distance to obstacles directly ahead."""
     try:
-        msg = pc_msgs.PointCloudPacked()
-        msg.ParseFromString(msg_data)
 
         # Find the point field offsets (x, y, z are standard PointXYZ fields)
         field_offsets = {}
@@ -154,7 +152,7 @@ def main():
 
     # Subscribe to depth camera
     node = gz.transport13.Node()
-    node.subscribe(DEPTH_TOPIC, on_point_cloud)
+    node.subscribe(DEPTH_TOPIC, gz.msgs10.pointcloud_packed_pb2.PointCloudPacked, on_point_cloud)
     print(f"[explorer] Subscribed to {DEPTH_TOPIC}")
     print(f"[explorer] Starting frontier exploration at {args.alt}m altitude")
 
