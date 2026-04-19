@@ -1117,7 +1117,11 @@ fn command_to_mav_item(cmd: &Command, home_lat: f64, home_lon: f64) -> Option<Ma
         },
         Command::WaypointRelative { north, east, alt } => {
             let (lat, lon) = crate::runtime::offset_to_latlon(home_lat, home_lon, *north, *east);
-            MavItem::Waypoint { lat, lon, alt: *alt as f32 }
+            MavItem::Waypoint {
+                lat,
+                lon,
+                alt: *alt as f32,
+            }
         }
         Command::Hover { duration } => MavItem::LoiterTime {
             duration: *duration as f32,

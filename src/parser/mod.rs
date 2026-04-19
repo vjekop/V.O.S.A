@@ -278,7 +278,10 @@ impl Parser {
 
         // Resolve the center: explicit `center: home` wins; otherwise use lat/lon coords.
         let resolved_center = center
-            .or_else(|| lat.zip(lon).map(|(la, lo)| GeoCenter::Coord { lat: la, lon: lo }))
+            .or_else(|| {
+                lat.zip(lon)
+                    .map(|(la, lo)| GeoCenter::Coord { lat: la, lon: lo })
+            })
             .ok_or_else(|| {
                 self.parse_err(
                     "geofence circle requires either 'center: home' or 'lat:' and 'lon:' params",

@@ -74,7 +74,11 @@ fn main() {
             inject,
         } => cmd_run(file, ast, mavlink, ros2, inject),
         Command::Check { file } => cmd_check(file),
-        Command::Serve { file, mavlink, port } => cmd_serve(file, mavlink, port),
+        Command::Serve {
+            file,
+            mavlink,
+            port,
+        } => cmd_serve(file, mavlink, port),
         Command::Docs => cmd_docs(),
     }
 }
@@ -241,12 +245,19 @@ fn cmd_serve(file: PathBuf, mavlink_conn: String, port: u16) {
 
     let addr = format!("0.0.0.0:{port}");
     let listener = TcpListener::bind(&addr).expect("failed to bind TCP port");
-    println!("{} {}", "Listening for explorer on".green().bold(), addr.bold());
+    println!(
+        "{} {}",
+        "Listening for explorer on".green().bold(),
+        addr.bold()
+    );
     println!("Protocol: send 'waypoint north=<m> east=<m> alt=<m>' per line");
 
     for stream in listener.incoming() {
         let Ok(stream) = stream else { continue };
-        let peer = stream.peer_addr().map(|a| a.to_string()).unwrap_or_default();
+        let peer = stream
+            .peer_addr()
+            .map(|a| a.to_string())
+            .unwrap_or_default();
         println!("[serve] Explorer connected from {peer}");
 
         let mut reader = BufReader::new(stream.try_clone().unwrap());

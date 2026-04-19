@@ -27,12 +27,17 @@ impl SafetySandbox {
 
     /// Validate a single command against a safety block — used by the serve API
     /// to check dynamically generated waypoints from an autonomous explorer.
-    pub fn validate_command(&self, cmd: &Command, safety: &Option<SafetyBlock>) -> Result<(), VosaError> {
+    pub fn validate_command(
+        &self,
+        cmd: &Command,
+        safety: &Option<SafetyBlock>,
+    ) -> Result<(), VosaError> {
         let Some(safety) = safety else { return Ok(()) };
         self.check_command(cmd, safety)?;
         // Geofence check for relative waypoints
         if let Command::WaypointRelative { north, east, .. } = cmd {
-            if let Some(crate::parser::ast::Geofence::Circle { center, radius }) = &safety.geofence {
+            if let Some(crate::parser::ast::Geofence::Circle { center, radius }) = &safety.geofence
+            {
                 let (clat, clon) = match center {
                     crate::parser::ast::GeoCenter::Home => (0.0_f64, 0.0_f64),
                     crate::parser::ast::GeoCenter::Coord { lat, lon } => (*lat, *lon),
@@ -527,14 +532,22 @@ fn intents_conflict(a: &TriggerIntent, b: &TriggerIntent) -> bool {
 fn conditions_can_overlap(a: &TriggerCondition, b: &TriggerCondition) -> bool {
     match (a, b) {
         (
-            TriggerCondition::Battery { operator: op_a, threshold_percent: t_a },
-            TriggerCondition::Battery { operator: op_b, threshold_percent: t_b },
+            TriggerCondition::Battery {
+                operator: op_a,
+                threshold_percent: t_a,
+            },
+            TriggerCondition::Battery {
+                operator: op_b,
+                threshold_percent: t_b,
+            },
         ) => {
             // Only truly ambiguous when both thresholds are identical — different
             // thresholds are tiered (each fires once at its own crossing point).
             match (op_a, op_b) {
                 (Operator::LessThan, Operator::LessThan)
-                | (Operator::GreaterThan, Operator::GreaterThan) => (t_a - t_b).abs() < f64::EPSILON,
+                | (Operator::GreaterThan, Operator::GreaterThan) => {
+                    (t_a - t_b).abs() < f64::EPSILON
+                }
                 _ => false,
             }
         }
@@ -542,12 +555,20 @@ fn conditions_can_overlap(a: &TriggerCondition, b: &TriggerCondition) -> bool {
         // only flag overlap when two triggers share the same sensor type.
         (TriggerCondition::ObstacleDetected, TriggerCondition::ObstacleDetected) => true,
         (TriggerCondition::ObstacleDetected, _) | (_, TriggerCondition::ObstacleDetected) => false,
-        (TriggerCondition::Custom { name: a, .. }, TriggerCondition::Custom { name: b, .. }) => a == b,
+        (TriggerCondition::Custom { name: a, .. }, TriggerCondition::Custom { name: b, .. }) => {
+            a == b
+        }
         (TriggerCondition::Custom { .. }, _) | (_, TriggerCondition::Custom { .. }) => false,
         // Two wind thresholds — same tiered logic as battery
         (
-            TriggerCondition::Wind { operator: op_a, threshold_ms: t_a },
-            TriggerCondition::Wind { operator: op_b, threshold_ms: t_b },
+            TriggerCondition::Wind {
+                operator: op_a,
+                threshold_ms: t_a,
+            },
+            TriggerCondition::Wind {
+                operator: op_b,
+                threshold_ms: t_b,
+            },
         ) => match (op_a, op_b) {
             (Operator::LessThan, Operator::LessThan)
             | (Operator::GreaterThan, Operator::GreaterThan) => (t_a - t_b).abs() < f64::EPSILON,
