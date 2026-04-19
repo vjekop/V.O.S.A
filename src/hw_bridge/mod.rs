@@ -73,10 +73,8 @@ impl TelemetryState {
     /// Update fields from an incoming MAVLink message.
     fn update(&mut self, msg: &MavMessage) {
         match msg {
-            MavMessage::SYS_STATUS(d) => {
-                if d.battery_remaining >= 0 {
-                    self.battery_percent = d.battery_remaining as f64;
-                }
+            MavMessage::SYS_STATUS(d) if d.battery_remaining >= 0 => {
+                self.battery_percent = d.battery_remaining as f64;
             }
             MavMessage::GPS_RAW_INT(d) => {
                 self.gps_fix_type = d.fix_type as u8;

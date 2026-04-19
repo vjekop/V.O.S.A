@@ -141,12 +141,10 @@ impl SafetySandbox {
                     &format!("waypoint(north: {north}m, east: {east}m) altitude"),
                 )?;
             }
-            Command::Hover { duration } => {
-                if *duration <= 0.0 {
-                    return Err(VosaError::SafetyViolation(
-                        "hover duration must be greater than 0 seconds".into(),
-                    ));
-                }
+            Command::Hover { duration } if *duration <= 0.0 => {
+                return Err(VosaError::SafetyViolation(
+                    "hover duration must be greater than 0 seconds".into(),
+                ));
             }
             _ => {}
         }
@@ -403,13 +401,11 @@ impl SafetySandbox {
         declared: &HashSet<&str>,
     ) -> Result<(), VosaError> {
         match condition {
-            TriggerCondition::Custom { name, .. } => {
-                if !declared.contains(name.as_str()) {
-                    return Err(VosaError::SafetyViolation(format!(
-                        "trigger references undeclared sensor '{name}' — \
-                         add 'sensor {name} from MESSAGE.field' to the mission body"
-                    )));
-                }
+            TriggerCondition::Custom { name, .. } if !declared.contains(name.as_str()) => {
+                return Err(VosaError::SafetyViolation(format!(
+                    "trigger references undeclared sensor '{name}' — \
+                     add 'sensor {name} from MESSAGE.field' to the mission body"
+                )));
             }
             TriggerCondition::And(a, b) | TriggerCondition::Or(a, b) => {
                 self.check_sensor_refs_condition(a, declared)?;
