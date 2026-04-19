@@ -152,7 +152,7 @@ def main():
 
     # Subscribe to depth camera
     node = gz.transport13.Node()
-    node.subscribe(DEPTH_TOPIC, gz.msgs10.pointcloud_packed_pb2.PointCloudPacked, on_point_cloud)
+    node.subscribe(gz.msgs10.pointcloud_packed_pb2.PointCloudPacked, DEPTH_TOPIC, on_point_cloud)
     print(f"[explorer] Subscribed to {DEPTH_TOPIC}")
     print(f"[explorer] Starting frontier exploration at {args.alt}m altitude")
 
