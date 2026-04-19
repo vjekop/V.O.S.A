@@ -241,7 +241,23 @@ fn cmd_serve(file: PathBuf, mavlink_conn: String, port: u16) {
         std::process::exit(2);
     }
     println!("{}", "Safety context loaded.".green().bold());
-    println!("MAVLink target: {}", mavlink_conn.bold());
+
+    // Determine cruise altitude from mission flight block, default 30m
+    let cruise_alt = mission
+        .flight
+        .as_ref()
+        .and_then(|f| f.cruise_altitude)
+        .unwrap_or(30.0);
+
+    // Connect, arm, and take off
+    let mut bridge = vosa::hw_bridge::MavlinkBridge::new(&mavlink_conn);
+    let (vehicle, mut telemetry) = match bridge.connect_arm_and_takeoff(cruise_alt) {
+        Ok(v) => v,
+        Err(e) => {
+            eprintln!("{} {e}", "mavlink error:".red().bold());
+            std::process::exit(3);
+        }
+    };
 
     let addr = format!("0.0.0.0:{port}");
     let listener = TcpListener::bind(&addr).expect("failed to bind TCP port");
@@ -284,8 +300,27 @@ fn cmd_serve(file: PathBuf, mavlink_conn: String, port: u16) {
                     let cmd = vosa::parser::ast::Command::WaypointRelative { north, east, alt };
                     match sandbox.validate_command(&cmd, &mission.safety) {
                         Ok(()) => {
-                            println!("[serve] ✓ waypoint N+{north}m E+{east}m alt {alt}m — safe, forwarding to PX4 (phase 2)");
-                            let _ = writeln!(writer, "ok");
+                            // Copy home position before mutable borrow in send_guided_waypoint
+                            let home_lat = telemetry.home_lat;
+                            let home_lon = telemetry.home_lon;
+                            let (lat, lon) =
+                                vosa::runtime::offset_to_latlon(home_lat, home_lon, north, east);
+                            match bridge.send_guided_waypoint(
+                                &vehicle,
+                                &mut telemetry,
+                                lat,
+                                lon,
+                                alt,
+                            ) {
+                                Ok(()) => {
+                                    println!("[serve] ✓ N+{north}m E+{east}m alt {alt}m");
+                                    let _ = writeln!(writer, "ok");
+                                }
+                                Err(e) => {
+                                    println!("[serve] mavlink error: {e}");
+                                    let _ = writeln!(writer, "error: mavlink: {e}");
+                                }
+                            }
                         }
                         Err(e) => {
                             println!("[serve] ✗ safety rejected: {e}");

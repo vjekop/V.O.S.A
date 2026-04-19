@@ -28,6 +28,7 @@ const PX4_CUSTOM_MAIN_MODE_AUTO: f32 = 4.0;
 const PX4_CUSTOM_SUB_MODE_AUTO_MISSION: f32 = 4.0;
 const PX4_CUSTOM_SUB_MODE_AUTO_RTL: f32 = 5.0;
 const PX4_CUSTOM_SUB_MODE_AUTO_LAND: f32 = 6.0;
+const PX4_CUSTOM_SUB_MODE_AUTO_LOITER: f32 = 3.0;
 
 // ── Telemetry state ───────────────────────────────────────────────────────────
 
@@ -35,7 +36,7 @@ const PX4_CUSTOM_SUB_MODE_AUTO_LAND: f32 = 6.0;
 /// This is what drives the reactive trigger system on real hardware —
 /// conditions are evaluated against actual sensor readings, not simulated values.
 #[derive(Debug, Clone)]
-struct TelemetryState {
+pub struct TelemetryState {
     /// Battery remaining (%), -1.0 until first SYS_STATUS received
     battery_percent: f64,
     /// Wind speed magnitude (m/s), derived from WIND_COV
@@ -49,9 +50,11 @@ struct TelemetryState {
     /// Home position received from autopilot
     home_set: bool,
     /// Home latitude in degrees
-    home_lat: f64,
+    pub home_lat: f64,
     /// Home longitude in degrees
-    home_lon: f64,
+    pub home_lon: f64,
+    /// Current altitude in metres (from VFR_HUD)
+    pub altitude_m: f64,
 }
 
 impl Default for TelemetryState {
@@ -64,6 +67,7 @@ impl Default for TelemetryState {
             home_set: false,
             home_lat: 0.0,
             home_lon: 0.0,
+            altitude_m: 0.0,
             custom_sensors: HashMap::new(),
         }
     }
@@ -91,6 +95,9 @@ impl TelemetryState {
                     );
                 }
                 self.home_set = true;
+            }
+            MavMessage::VFR_HUD(d) => {
+                self.altitude_m = d.alt as f64;
             }
             MavMessage::WIND_COV(d) => {
                 self.wind_speed_ms = ((d.wind_x as f64).powi(2) + (d.wind_y as f64).powi(2)).sqrt();
@@ -381,6 +388,179 @@ impl MavlinkBridge {
                 .filter_map(|it| it.altitude())
                 .fold(0.0_f64, f64::max),
         })
+    }
+
+    /// Connect to PX4, arm, and take off to `altitude_m`. Returns when the
+    /// drone has reached cruise altitude and is holding in LOITER mode, ready
+    /// to accept individual guided waypoints from the explorer.
+    pub fn connect_arm_and_takeoff(
+        &mut self,
+        altitude_m: f64,
+    ) -> Result<(mavlink::Connection<MavMessage>, TelemetryState), VosaError> {
+        println!("[MAVLink] Connecting to {} ...", self.connection_string);
+        let vehicle = mavlink::connect::<MavMessage>(&self.connection_string)
+            .map_err(|e| VosaError::RuntimeError(format!("Connection failed: {e}")))?;
+
+        println!("[MAVLink] Sending GCS heartbeat");
+        vehicle
+            .send_default(&gcs_heartbeat())
+            .map_err(|e| VosaError::RuntimeError(format!("Heartbeat send failed: {e}")))?;
+
+        println!("[MAVLink] Waiting for vehicle heartbeat ...");
+        let mut telemetry = TelemetryState::default();
+        recv_until(&vehicle, &mut telemetry, HEARTBEAT_WAIT_ATTEMPTS, |msg| {
+            matches!(msg, MavMessage::HEARTBEAT(_))
+        })?;
+        println!("[MAVLink] Vehicle link established");
+
+        for _ in 0..30 {
+            let _ = vehicle.send_default(&gcs_heartbeat());
+            let _ = vehicle.recv();
+            std::thread::sleep(std::time::Duration::from_millis(100));
+        }
+        println!("[MAVLink] GCS link established");
+
+        println!("[MAVLink] Waiting for 3D GPS lock ...");
+        for attempt in 0..GPS_WAIT_ATTEMPTS {
+            if telemetry.gps_fix_type >= 3 {
+                println!("[MAVLink] GPS lock acquired");
+                break;
+            }
+            if attempt % 100 == 0 {
+                println!(
+                    "[MAVLink] Waiting for GPS ... fix_type={}",
+                    telemetry.gps_fix_type
+                );
+            }
+            match vehicle.recv() {
+                Ok((_, msg)) => telemetry.update(&msg),
+                Err(e) => return Err(VosaError::RuntimeError(format!("GPS wait error: {e}"))),
+            }
+        }
+
+        println!("[MAVLink] Waiting for home position ...");
+        for _ in 0..WAIT_ATTEMPTS {
+            if telemetry.home_set {
+                break;
+            }
+            match vehicle.recv() {
+                Ok((_, msg)) => telemetry.update(&msg),
+                Err(e) => return Err(VosaError::RuntimeError(format!("Home wait error: {e}"))),
+            }
+        }
+        println!(
+            "[MAVLink] Home: lat={:.7} lon={:.7}",
+            telemetry.home_lat, telemetry.home_lon
+        );
+
+        // Upload single-item takeoff mission then arm
+        let items = vec![MavItem::Takeoff {
+            altitude: altitude_m as f32,
+        }];
+        set_flight_mode(
+            &vehicle,
+            PX4_CUSTOM_MAIN_MODE_AUTO,
+            PX4_CUSTOM_SUB_MODE_AUTO_MISSION,
+        )?;
+        wait_for_command_ack(
+            &vehicle,
+            &mut telemetry,
+            common::MavCmd::MAV_CMD_DO_SET_MODE,
+        )?;
+        let home_lat = telemetry.home_lat;
+        let home_lon = telemetry.home_lon;
+        upload_mission(&vehicle, &mut telemetry, &items, home_lat, home_lon)?;
+
+        println!("[MAVLink] Waiting for EKF2 (up to 30 s) ...");
+        for i in 0..300 {
+            let _ = vehicle.send_default(&gcs_heartbeat());
+            if let Ok((_, msg)) = vehicle.recv() {
+                telemetry.update(&msg);
+            }
+            if i % 50 == 49 {
+                println!("[MAVLink]   ... still waiting");
+            }
+            std::thread::sleep(std::time::Duration::from_millis(100));
+        }
+
+        println!("[MAVLink] Arming ...");
+        send_command_long(
+            &vehicle,
+            common::MavCmd::MAV_CMD_COMPONENT_ARM_DISARM,
+            [1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+        )?;
+        wait_for_command_ack(
+            &vehicle,
+            &mut telemetry,
+            common::MavCmd::MAV_CMD_COMPONENT_ARM_DISARM,
+        )?;
+        println!("[MAVLink] Armed");
+
+        send_command_long(&vehicle, common::MavCmd::MAV_CMD_MISSION_START, [0.0; 7])?;
+        println!("[MAVLink] Taking off to {altitude_m}m ...");
+
+        // Wait until altitude is reached (within 5m)
+        for _ in 0..600 {
+            let _ = vehicle.send_default(&gcs_heartbeat());
+            if let Ok((_, msg)) = vehicle.recv() {
+                telemetry.update(&msg);
+            }
+            if telemetry.altitude_m >= altitude_m - 5.0 {
+                println!(
+                    "[MAVLink] Takeoff complete — altitude {:.1}m",
+                    telemetry.altitude_m
+                );
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(100));
+        }
+
+        // Switch to LOITER so the drone holds position while waiting for waypoints
+        set_flight_mode(
+            &vehicle,
+            PX4_CUSTOM_MAIN_MODE_AUTO,
+            PX4_CUSTOM_SUB_MODE_AUTO_LOITER,
+        )?;
+        println!("[MAVLink] Holding in LOITER — ready for explorer waypoints");
+
+        Ok((vehicle, telemetry))
+    }
+
+    /// Send a single guided waypoint using MAV_CMD_DO_REPOSITION.
+    /// The drone flies to the absolute GPS position and holds there.
+    pub fn send_guided_waypoint(
+        &self,
+        vehicle: &mavlink::Connection<MavMessage>,
+        telemetry: &mut TelemetryState,
+        lat: f64,
+        lon: f64,
+        alt: f64,
+    ) -> Result<(), VosaError> {
+        // MAV_CMD_DO_REPOSITION: param5=lat, param6=lon, param7=alt(AMSL)
+        let msg = mavlink::common::MavMessage::COMMAND_LONG(mavlink::common::COMMAND_LONG_DATA {
+            param1: -1.0, // speed: -1 = use default
+            param2: 0.0,
+            param3: 0.0,
+            param4: f32::NAN, // yaw: NaN = keep current
+            param5: lat as f32,
+            param6: lon as f32,
+            param7: alt as f32,
+            command: common::MavCmd::MAV_CMD_DO_REPOSITION,
+            target_system: 1,
+            target_component: 1,
+            confirmation: 0,
+        });
+        vehicle
+            .send_default(&msg)
+            .map_err(|e| VosaError::RuntimeError(format!("Reposition send failed: {e}")))?;
+
+        // Drain incoming messages to keep telemetry fresh
+        for _ in 0..5 {
+            if let Ok((_, m)) = vehicle.recv() {
+                telemetry.update(&m);
+            }
+        }
+        Ok(())
     }
 }
 
