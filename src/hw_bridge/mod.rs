@@ -438,20 +438,32 @@ impl MavlinkBridge {
             }
         }
 
-        println!("[MAVLink] Waiting for home position ...");
-        for _ in 0..WAIT_ATTEMPTS {
-            if telemetry.home_set {
+        // Wait up to 30 s for a valid home position before uploading the mission.
+        // PX4 rejects takeoff missions whose first item is far from home — if we
+        // upload with home=0,0 the feasibility checker flags it as 5000+ km away.
+        println!("[MAVLink] Waiting for valid home position (up to 30 s) ...");
+        for i in 0..300 {
+            let _ = vehicle.send_default(&gcs_heartbeat());
+            if let Ok((_, msg)) = vehicle.recv() {
+                telemetry.update(&msg);
+            }
+            if telemetry.home_set && (telemetry.home_lat.abs() > 0.001 || telemetry.home_lon.abs() > 0.001) {
+                println!(
+                    "[MAVLink] Home GPS: lat={:.7} lon={:.7}",
+                    telemetry.home_lat, telemetry.home_lon
+                );
                 break;
             }
-            match vehicle.recv() {
-                Ok((_, msg)) => telemetry.update(&msg),
-                Err(e) => return Err(VosaError::RuntimeError(format!("Home wait error: {e}"))),
+            if i % 50 == 49 {
+                println!("[MAVLink]   ... waiting for home position");
             }
+            std::thread::sleep(std::time::Duration::from_millis(100));
         }
-        println!(
-            "[MAVLink] Home: lat={:.7} lon={:.7}",
-            telemetry.home_lat, telemetry.home_lon
-        );
+        if !telemetry.home_set || (telemetry.home_lat.abs() < 0.001 && telemetry.home_lon.abs() < 0.001) {
+            return Err(VosaError::RuntimeError(
+                "Timed out waiting for valid home GPS position — is PX4 fully started?".into(),
+            ));
+        }
 
         // Upload single-item takeoff mission then arm
         let items = vec![MavItem::Takeoff {
@@ -499,7 +511,9 @@ impl MavlinkBridge {
         send_command_long(&vehicle, common::MavCmd::MAV_CMD_MISSION_START, [0.0; 7])?;
         println!("[MAVLink] Taking off to {altitude_m}m ...");
 
-        // Wait until altitude is reached (within 5m)
+        // Wait until altitude is reached (within 5 m). Fail loudly if it never happens
+        // so the explorer doesn't try to navigate with the drone still on the ground.
+        let mut took_off = false;
         for _ in 0..600 {
             let _ = vehicle.send_default(&gcs_heartbeat());
             if let Ok((_, msg)) = vehicle.recv() {
@@ -510,9 +524,17 @@ impl MavlinkBridge {
                     "[MAVLink] Takeoff complete — altitude {:.1}m",
                     telemetry.altitude_m
                 );
+                took_off = true;
                 break;
             }
             std::thread::sleep(std::time::Duration::from_millis(100));
+        }
+        if !took_off {
+            return Err(VosaError::RuntimeError(format!(
+                "Takeoff timed out — drone only reached {:.1}m (target {}m). \
+                 Check PX4 console for arming failures.",
+                telemetry.altitude_m, altitude_m
+            )));
         }
 
         // Switch to LOITER so the drone holds position while waiting for waypoints
