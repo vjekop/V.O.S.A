@@ -411,7 +411,7 @@ _state = SensorState()
 # Gazebo subscribers
 # ══════════════════════════════════════════════════════════════════════════════
 
-def _on_depth(msg_data: bytes):
+def _on_depth(msg: pc_msgs.PointCloudPacked):
     """
     Parse OakD-Lite point cloud.
 
@@ -420,8 +420,6 @@ def _on_depth(msg_data: bytes):
     drone yaw. Subsamples to MAX_DEPTH_POINTS to keep CPU load reasonable.
     """
     try:
-        msg = pc_msgs.PointCloudPacked()
-        msg.ParseFromString(msg_data)
 
         offsets = {f.name: f.offset for f in msg.field}
         if "x" not in offsets:
@@ -470,7 +468,7 @@ def _on_depth(msg_data: bytes):
         print(f"[explorer] depth error: {exc}")
 
 
-def _on_lidar(msg_data: bytes):
+def _on_lidar(msg: lidar_msgs.LaserScan):
     """
     Parse 2D LiDAR scan (LaserScan message).
 
@@ -479,9 +477,6 @@ def _on_lidar(msg_data: bytes):
     drone's current yaw — this way the angles are always in world frame.
     """
     try:
-        msg = lidar_msgs.LaserScan()
-        msg.ParseFromString(msg_data)
-
         ranges = list(msg.ranges)
         with _state.lock:
             _state.lidar_ranges    = ranges
@@ -493,7 +488,7 @@ def _on_lidar(msg_data: bytes):
         print(f"[explorer] lidar error: {exc}")
 
 
-def _on_pose(msg_data: bytes):
+def _on_pose(msg: pose_msgs.Pose_V):
     """
     Track drone position and heading from Gazebo ground-truth pose.
 
@@ -501,9 +496,6 @@ def _on_pose(msg_data: bytes):
     Yaw extracted from quaternion — 0 = facing north.
     """
     try:
-        msg = pose_msgs.Pose_V()
-        msg.ParseFromString(msg_data)
-
         for pose in msg.pose:
             if pose.name != DRONE_MODEL:
                 continue
