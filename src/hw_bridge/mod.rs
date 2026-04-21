@@ -639,10 +639,20 @@ impl MavlinkBridge {
             ));
         }
 
-        // Upload single-item takeoff mission then arm
-        let items = vec![MavItem::Takeoff {
-            altitude: altitude_m as f32,
-        }];
+        // Upload takeoff + loiter mission so PX4 climbs fully to cruise altitude
+        // and holds there. A single-item mission completes early (PX4 accepts
+        // takeoff at its own minimum altitude, not the target) leaving the drone
+        // hovering at ~10 m. The loiter item forces it to climb to altitude_m first.
+        let items = vec![
+            MavItem::Takeoff {
+                altitude: altitude_m as f32,
+            },
+            MavItem::LoiterUnlim {
+                lat: telemetry.home_lat,
+                lon: telemetry.home_lon,
+                altitude: altitude_m as f32,
+            },
+        ];
         set_flight_mode(
             &vehicle,
             PX4_CUSTOM_MAIN_MODE_AUTO,
@@ -750,8 +760,11 @@ impl MavlinkBridge {
         let mut took_off = false;
         for _ in 0..600 {
             let _ = vehicle.send_default(&gcs_heartbeat());
-            if let Ok((_, msg)) = vehicle.recv() {
-                telemetry.update(&msg);
+            for _ in 0..20 {
+                match vehicle.recv() {
+                    Ok((_, msg)) => telemetry.update(&msg),
+                    Err(_) => break,
+                }
             }
             if telemetry.altitude_m >= altitude_m - 5.0 {
                 println!(
@@ -1394,6 +1407,7 @@ enum MavItem {
     Takeoff { altitude: f32 },
     Waypoint { lat: f64, lon: f64, alt: f32 },
     LoiterTime { duration: f32 },
+    LoiterUnlim { lat: f64, lon: f64, altitude: f32 },
     Land,
     ReturnHome,
     CameraStartCapture,
@@ -1435,6 +1449,17 @@ impl MavItem {
                 0,
                 0.0,
                 *duration,
+                0.0,
+                0.0,
+                f32::NAN,
+                common::MavFrame::MAV_FRAME_GLOBAL_RELATIVE_ALT,
+            ),
+            MavItem::LoiterUnlim { lat, lon, altitude } => (
+                common::MavCmd::MAV_CMD_NAV_LOITER_UNLIM,
+                (*lat * 1e7) as i32,
+                (*lon * 1e7) as i32,
+                *altitude,
+                0.0,
                 0.0,
                 0.0,
                 f32::NAN,
@@ -1522,6 +1547,7 @@ impl MavItem {
                 format!("NAV_WAYPOINT ({lat:.5}°, {lon:.5}°) alt={alt}m")
             }
             MavItem::LoiterTime { duration } => format!("NAV_LOITER_TIME {duration}s"),
+            MavItem::LoiterUnlim { altitude, .. } => format!("NAV_LOITER_UNLIM alt={altitude}m"),
             MavItem::Land => "NAV_LAND".into(),
             MavItem::ReturnHome => "NAV_RETURN_TO_LAUNCH".into(),
             MavItem::CameraStartCapture => "VIDEO_START_CAPTURE".into(),
@@ -1533,6 +1559,7 @@ impl MavItem {
     fn altitude(&self) -> Option<f64> {
         match self {
             MavItem::Takeoff { altitude } => Some(*altitude as f64),
+            MavItem::LoiterUnlim { altitude, .. } => Some(*altitude as f64),
             MavItem::Waypoint { alt, .. } => Some(*alt as f64),
             _ => None,
         }
