@@ -585,9 +585,9 @@ def main():
     gateway.connect()
 
     node = gz.transport13.Node()
-    node.subscribe(DEPTH_TOPIC, _on_depth)
-    node.subscribe(LIDAR_TOPIC, _on_lidar)
-    node.subscribe(POSE_TOPIC,  _on_pose)
+    node.subscribe(pc_msgs.PointCloudPacked, DEPTH_TOPIC, _on_depth)
+    node.subscribe(lidar_msgs.LaserScan,     LIDAR_TOPIC, _on_lidar)
+    node.subscribe(pose_msgs.Pose_V,         POSE_TOPIC,  _on_pose)
     print("[explorer] Subscribed: depth camera + LiDAR + pose")
     print(f"[explorer] Sensor fusion active — cruise alt {args.alt}m")
 
