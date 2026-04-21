@@ -497,7 +497,9 @@ impl MavlinkBridge {
                 }
                 telemetry.update(&msg);
             }
-            if telemetry.home_set && (telemetry.home_lat.abs() > 0.001 || telemetry.home_lon.abs() > 0.001) {
+            if telemetry.home_set
+                && (telemetry.home_lat.abs() > 0.001 || telemetry.home_lon.abs() > 0.001)
+            {
                 println!(
                     "[MAVLink] Home GPS: lat={:.7} lon={:.7}",
                     telemetry.home_lat, telemetry.home_lon
@@ -509,7 +511,9 @@ impl MavlinkBridge {
             }
             std::thread::sleep(std::time::Duration::from_millis(100));
         }
-        if !telemetry.home_set || (telemetry.home_lat.abs() < 0.001 && telemetry.home_lon.abs() < 0.001) {
+        if !telemetry.home_set
+            || (telemetry.home_lat.abs() < 0.001 && telemetry.home_lon.abs() < 0.001)
+        {
             return Err(VosaError::RuntimeError(
                 "Timed out waiting for valid home GPS position — is PX4 fully started?".into(),
             ));
