@@ -8,6 +8,14 @@
 
 ---
 
+## Demo
+
+VOSA connecting to PX4 SITL, arming, taking off, and running a reactive mission in Gazebo:
+
+<img width="800" alt="VOSA demo — PX4 SITL + Gazebo" src="https://github.com/user-attachments/assets/5517fab0-bad5-4e29-99c3-258dcb986a64" />
+
+---
+
 ## The Problem
 
 Drone crashes are expensive. Fly-aways are embarrassing. Manually aborted flights cost time and money.
