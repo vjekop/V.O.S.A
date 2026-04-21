@@ -12,7 +12,8 @@
 
 VOSA connecting to PX4 SITL, arming, taking off, and running a reactive mission in Gazebo:
 
-<img width="800" alt="VOSA demo — PX4 SITL + Gazebo" src="https://github.com/user-attachments/assets/5517fab0-bad5-4e29-99c3-258dcb986a64" />
+<img width="400" height="225" alt="2026-04-17 01-12-36" src="https://github.com/user-attachments/assets/9dc7557e-1715-4fc8-b7ae-41ef6e92d776" />
+
 
 ---
 
