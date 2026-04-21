@@ -84,21 +84,9 @@ impl TelemetryState {
                 if d.battery_remaining >= 0 {
                     self.battery_percent = d.battery_remaining as f64;
                 }
-                // AHRS bit present+enabled+healthy → EKF2 ready
-                let ahrs = common::MavSysStatusSensor::MAV_SYS_STATUS_AHRS;
-                let was_ok = self.ekf2_ok;
-                self.ekf2_ok = d.onboard_control_sensors_present.contains(ahrs)
-                    && d.onboard_control_sensors_enabled.contains(ahrs)
-                    && d.onboard_control_sensors_health.contains(ahrs);
-                if !was_ok {
-                    eprintln!(
-                        "[DEBUG SYS_STATUS] present={:#010x} enabled={:#010x} health={:#010x} ekf2_ok={}",
-                        d.onboard_control_sensors_present.bits(),
-                        d.onboard_control_sensors_enabled.bits(),
-                        d.onboard_control_sensors_health.bits(),
-                        self.ekf2_ok,
-                    );
-                }
+                // PX4 sets MAV_SYS_STATUS_PREARM_CHECK in health when pre-arm checks pass
+                let prearm = common::MavSysStatusSensor::MAV_SYS_STATUS_PREARM_CHECK;
+                self.ekf2_ok = d.onboard_control_sensors_health.contains(prearm);
             }
             MavMessage::GPS_RAW_INT(d) => {
                 self.gps_fix_type = d.fix_type as u8;
