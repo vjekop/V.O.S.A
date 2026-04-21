@@ -438,13 +438,43 @@ impl MavlinkBridge {
             }
         }
 
+        // Request HOME_POSITION explicitly — PX4 sends it once at startup and we
+        // may have connected after that event, so we request it again.
+        let _ = send_command_long(
+            &vehicle,
+            common::MavCmd::MAV_CMD_REQUEST_MESSAGE,
+            [242.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0], // 242 = MAVLINK_MSG_ID_HOME_POSITION
+        );
+
         // Wait up to 30 s for a valid home position before uploading the mission.
-        // PX4 rejects takeoff missions whose first item is far from home — if we
-        // upload with home=0,0 the feasibility checker flags it as 5000+ km away.
+        // Falls back to GLOBAL_POSITION_INT if HOME_POSITION never arrives.
         println!("[MAVLink] Waiting for valid home position (up to 30 s) ...");
         for i in 0..300 {
             let _ = vehicle.send_default(&gcs_heartbeat());
+            // Re-request every 5 s in case the first request was missed
+            if i % 50 == 0 {
+                let _ = send_command_long(
+                    &vehicle,
+                    common::MavCmd::MAV_CMD_REQUEST_MESSAGE,
+                    [242.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+                );
+            }
             if let Ok((_, msg)) = vehicle.recv() {
+                // Also accept GLOBAL_POSITION_INT as home fallback
+                if let MavMessage::GLOBAL_POSITION_INT(ref d) = msg {
+                    if !telemetry.home_set {
+                        let lat = d.lat as f64 / 1e7;
+                        let lon = d.lon as f64 / 1e7;
+                        if lat.abs() > 0.001 || lon.abs() > 0.001 {
+                            telemetry.home_lat = lat;
+                            telemetry.home_lon = lon;
+                            telemetry.home_set = true;
+                            println!(
+                                "[MAVLink] Home from GLOBAL_POSITION_INT: lat={lat:.7} lon={lon:.7}"
+                            );
+                        }
+                    }
+                }
                 telemetry.update(&msg);
             }
             if telemetry.home_set && (telemetry.home_lat.abs() > 0.001 || telemetry.home_lon.abs() > 0.001) {
