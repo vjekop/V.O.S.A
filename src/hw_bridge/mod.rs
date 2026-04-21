@@ -288,7 +288,27 @@ impl MavlinkBridge {
             println!("[MAVLink] Home position set");
         }
 
-        // ── 4. Set AUTO.MISSION mode ──────────────────────────────────────────
+        // ── 4. Clear any cached dataman mission ──────────────────────────────
+        // PX4 persists the last uploaded mission in dataman and auto-arms/starts
+        // it on SITL restart. Sending MISSION_CLEAR_ALL before uploading our
+        // mission prevents the old mission from interfering with the new takeoff.
+        println!("[MAVLink] Clearing any existing cached mission ...");
+        vehicle
+            .send_default(&MavMessage::MISSION_CLEAR_ALL(
+                common::MISSION_CLEAR_ALL_DATA {
+                    target_system: TARGET_SYSTEM,
+                    target_component: TARGET_COMPONENT,
+                },
+            ))
+            .map_err(|e| VosaError::RuntimeError(format!("MISSION_CLEAR_ALL failed: {e}")))?;
+        // Give PX4 a moment to acknowledge and clear
+        for _ in 0..20 {
+            let _ = vehicle.recv().map(|(_, msg)| telemetry.update(&msg));
+            std::thread::sleep(std::time::Duration::from_millis(50));
+        }
+        println!("[MAVLink] Mission cache cleared");
+
+        // ── 5. Set AUTO.MISSION mode ──────────────────────────────────────────
         println!("[MAVLink] Setting AUTO.MISSION mode ...");
         set_flight_mode(
             &vehicle,
@@ -302,7 +322,7 @@ impl MavlinkBridge {
         )?;
         println!("[MAVLink] Mode: AUTO.MISSION");
 
-        // ── 5. Build and upload mission ───────────────────────────────────────
+        // ── 6. Build and upload mission ───────────────────────────────────────
         let home_lat = telemetry.home_lat;
         let home_lon = telemetry.home_lon;
         let mut items: Vec<MavItem> = Vec::new();
@@ -311,7 +331,7 @@ impl MavlinkBridge {
         upload_mission(&vehicle, &mut telemetry, &items, home_lat, home_lon)?;
         println!("[MAVLink] Mission upload complete");
 
-        // ── 6. Wait for EKF2 + arming checks to clear, then arm ─────────────
+        // ── 7. Wait for EKF2 + arming checks to clear, then arm ─────────────
         // PX4 refuses to arm if EKF2 hasn't converged. Poll SYS_STATUS for up
         // to 30 s; if it clears we arm normally, if not we try anyway.
         println!("[MAVLink] Waiting for EKF2 / preflight checks (up to 30 s) ...");
@@ -339,7 +359,7 @@ impl MavlinkBridge {
         )?;
         println!("[MAVLink] Armed");
 
-        // ── 7. Start mission ──────────────────────────────────────────────────
+        // ── 8. Start mission ──────────────────────────────────────────────────
         println!("[MAVLink] Starting mission ...");
         send_command_long(
             &vehicle,
@@ -348,7 +368,7 @@ impl MavlinkBridge {
         )?;
         println!("[MAVLink] Mission running — monitoring telemetry");
 
-        // ── 8. Monitor telemetry + evaluate reactive triggers ─────────────────
+        // ── 9. Monitor telemetry + evaluate reactive triggers ─────────────────
         let mut triggers = collect_triggers(&mission.sequence.statements);
         let item_count = items.len();
         let mut steps = items
@@ -370,7 +390,7 @@ impl MavlinkBridge {
             &mission.sensors,
         )?;
 
-        // ── 9. Return to launch after waypoints complete ──────────────────────
+        // ── 10. Return to launch after waypoints complete ─────────────────────
         println!("[MAVLink] Waypoints complete — sending RTL");
         set_flight_mode(
             &vehicle,
@@ -493,6 +513,22 @@ impl MavlinkBridge {
             return Err(VosaError::RuntimeError(
                 "Timed out waiting for valid home GPS position — is PX4 fully started?".into(),
             ));
+        }
+
+        // Clear any cached dataman mission before uploading ours.
+        // PX4 persists the last mission and auto-arms/starts it on SITL restart,
+        // which races with our own arm sequence and stalls the climb at ~3 m.
+        vehicle
+            .send_default(&MavMessage::MISSION_CLEAR_ALL(
+                common::MISSION_CLEAR_ALL_DATA {
+                    target_system: TARGET_SYSTEM,
+                    target_component: TARGET_COMPONENT,
+                },
+            ))
+            .map_err(|e| VosaError::RuntimeError(format!("MISSION_CLEAR_ALL failed: {e}")))?;
+        for _ in 0..20 {
+            let _ = vehicle.recv().map(|(_, msg)| telemetry.update(&msg));
+            std::thread::sleep(std::time::Duration::from_millis(50));
         }
 
         // Upload single-item takeoff mission then arm
@@ -967,7 +1003,7 @@ fn set_flight_mode<C: MavConnection<MavMessage>>(
     )
 }
 
-fn send_command_long<C: MavConnection<MavMessage>>(
+fn send_command_long<C: MavConnection<MavMessage> + ?Sized>(
     vehicle: &C,
     command: common::MavCmd,
     params: [f32; 7],
