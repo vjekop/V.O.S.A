@@ -86,9 +86,19 @@ impl TelemetryState {
                 }
                 // AHRS bit present+enabled+healthy → EKF2 ready
                 let ahrs = common::MavSysStatusSensor::MAV_SYS_STATUS_AHRS;
+                let was_ok = self.ekf2_ok;
                 self.ekf2_ok = d.onboard_control_sensors_present.contains(ahrs)
                     && d.onboard_control_sensors_enabled.contains(ahrs)
                     && d.onboard_control_sensors_health.contains(ahrs);
+                if !was_ok {
+                    eprintln!(
+                        "[DEBUG SYS_STATUS] present={:#010x} enabled={:#010x} health={:#010x} ekf2_ok={}",
+                        d.onboard_control_sensors_present.bits(),
+                        d.onboard_control_sensors_enabled.bits(),
+                        d.onboard_control_sensors_health.bits(),
+                        self.ekf2_ok,
+                    );
+                }
             }
             MavMessage::GPS_RAW_INT(d) => {
                 self.gps_fix_type = d.fix_type as u8;
@@ -361,14 +371,18 @@ impl MavlinkBridge {
         // PX4 refuses to arm if EKF2 hasn't converged. Poll SYS_STATUS for up
         // to 30 s; if it clears we arm normally, if not we try anyway.
         println!("[MAVLink] Waiting for EKF2 / preflight checks (up to 30 s) ...");
-        for i in 0..300 {
+        'ekf2_mission: for i in 0..300 {
             let _ = vehicle.send_default(&gcs_heartbeat());
-            if let Ok((_, msg)) = vehicle.recv() {
-                telemetry.update(&msg);
+            // Drain all queued messages each tick so we don't miss SYS_STATUS
+            for _ in 0..50 {
+                match vehicle.recv() {
+                    Ok((_, msg)) => telemetry.update(&msg),
+                    Err(_) => break,
+                }
             }
             if telemetry.ekf2_ok {
                 println!("[MAVLink] EKF2 healthy");
-                break;
+                break 'ekf2_mission;
             }
             if i % 50 == 49 {
                 println!("[MAVLink]   ... still waiting for EKF2");
@@ -656,14 +670,17 @@ impl MavlinkBridge {
         upload_mission(&vehicle, &mut telemetry, &items, home_lat, home_lon)?;
 
         println!("[MAVLink] Waiting for EKF2 (up to 30 s) ...");
-        for i in 0..300 {
+        'ekf2_serve: for i in 0..300 {
             let _ = vehicle.send_default(&gcs_heartbeat());
-            if let Ok((_, msg)) = vehicle.recv() {
-                telemetry.update(&msg);
+            for _ in 0..50 {
+                match vehicle.recv() {
+                    Ok((_, msg)) => telemetry.update(&msg),
+                    Err(_) => break,
+                }
             }
             if telemetry.ekf2_ok {
                 println!("[MAVLink] EKF2 healthy");
-                break;
+                break 'ekf2_serve;
             }
             if i % 50 == 49 {
                 println!("[MAVLink]   ... still waiting");
