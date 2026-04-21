@@ -55,6 +55,8 @@ pub struct TelemetryState {
     pub home_lon: f64,
     /// Current altitude in metres (from VFR_HUD)
     pub altitude_m: f64,
+    /// EKF2 / AHRS health: true once SYS_STATUS reports AHRS present+healthy
+    ekf2_ok: bool,
 }
 
 impl Default for TelemetryState {
@@ -68,6 +70,7 @@ impl Default for TelemetryState {
             home_lat: 0.0,
             home_lon: 0.0,
             altitude_m: 0.0,
+            ekf2_ok: false,
             custom_sensors: HashMap::new(),
         }
     }
@@ -77,8 +80,15 @@ impl TelemetryState {
     /// Update fields from an incoming MAVLink message.
     fn update(&mut self, msg: &MavMessage) {
         match msg {
-            MavMessage::SYS_STATUS(d) if d.battery_remaining >= 0 => {
-                self.battery_percent = d.battery_remaining as f64;
+            MavMessage::SYS_STATUS(d) => {
+                if d.battery_remaining >= 0 {
+                    self.battery_percent = d.battery_remaining as f64;
+                }
+                // AHRS bit present+enabled+healthy → EKF2 ready
+                let ahrs = common::MavSysStatusSensor::MAV_SYS_STATUS_AHRS;
+                self.ekf2_ok = d.onboard_control_sensors_present.contains(ahrs)
+                    && d.onboard_control_sensors_enabled.contains(ahrs)
+                    && d.onboard_control_sensors_health.contains(ahrs);
             }
             MavMessage::GPS_RAW_INT(d) => {
                 self.gps_fix_type = d.fix_type as u8;
@@ -356,12 +366,20 @@ impl MavlinkBridge {
             if let Ok((_, msg)) = vehicle.recv() {
                 telemetry.update(&msg);
             }
+            if telemetry.ekf2_ok {
+                println!("[MAVLink] EKF2 healthy");
+                break;
+            }
             if i % 50 == 49 {
                 println!("[MAVLink]   ... still waiting for EKF2");
             }
             std::thread::sleep(std::time::Duration::from_millis(100));
         }
-        println!("[MAVLink] Preflight wait complete — arming ...");
+        if !telemetry.ekf2_ok {
+            return Err(VosaError::RuntimeError(
+                "EKF2 not healthy after 30 s — cannot arm safely. Check PX4 console.".into(),
+            ));
+        }
         println!("[MAVLink] Arming ...");
         send_command_long(
             &vehicle,
@@ -643,10 +661,19 @@ impl MavlinkBridge {
             if let Ok((_, msg)) = vehicle.recv() {
                 telemetry.update(&msg);
             }
+            if telemetry.ekf2_ok {
+                println!("[MAVLink] EKF2 healthy");
+                break;
+            }
             if i % 50 == 49 {
                 println!("[MAVLink]   ... still waiting");
             }
             std::thread::sleep(std::time::Duration::from_millis(100));
+        }
+        if !telemetry.ekf2_ok {
+            return Err(VosaError::RuntimeError(
+                "EKF2 not healthy after 30 s — cannot arm safely. Check PX4 console.".into(),
+            ));
         }
 
         println!("[MAVLink] Arming ...");
