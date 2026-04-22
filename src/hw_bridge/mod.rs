@@ -665,8 +665,9 @@ impl MavlinkBridge {
         Ok((vehicle, telemetry))
     }
 
-    /// Send a single guided waypoint using MAV_CMD_DO_REPOSITION.
-    /// The drone flies to the absolute GPS position and holds there.
+    /// Send a single guided waypoint by uploading a 1-item NAV_WAYPOINT mission.
+    /// DO_REPOSITION (cmd 192) is unsupported on some PX4 builds; mission upload
+    /// is universally supported.
     pub fn send_guided_waypoint(
         &self,
         vehicle: &mavlink::Connection<MavMessage>,
@@ -675,26 +676,21 @@ impl MavlinkBridge {
         lon: f64,
         alt: f64,
     ) -> Result<(), VosaError> {
-        // MAV_CMD_DO_REPOSITION: param5=lat, param6=lon, param7=alt(AMSL)
-        let msg = mavlink::common::MavMessage::COMMAND_LONG(mavlink::common::COMMAND_LONG_DATA {
-            param1: -1.0, // speed: -1 = use default
-            param2: 0.0,
-            param3: 0.0,
-            param4: f32::NAN, // yaw: NaN = keep current
-            param5: lat as f32,
-            param6: lon as f32,
-            param7: alt as f32,
-            command: common::MavCmd::MAV_CMD_DO_REPOSITION,
-            target_system: 1,
-            target_component: 1,
-            confirmation: 0,
-        });
-        vehicle
-            .send_default(&msg)
-            .map_err(|e| VosaError::RuntimeError(format!("Reposition send failed: {e}")))?;
-
-        // Drain incoming messages to keep telemetry fresh
-        for _ in 0..5 {
+        let items = vec![MavItem::Waypoint {
+            lat,
+            lon,
+            alt: alt as f32,
+        }];
+        let home_lat = telemetry.home_lat;
+        let home_lon = telemetry.home_lon;
+        set_flight_mode(
+            vehicle,
+            PX4_CUSTOM_MAIN_MODE_AUTO,
+            PX4_CUSTOM_SUB_MODE_AUTO_MISSION,
+        )?;
+        upload_mission(vehicle, telemetry, &items, home_lat, home_lon)?;
+        send_command_long(vehicle, common::MavCmd::MAV_CMD_MISSION_START, [0.0; 7])?;
+        for _ in 0..10 {
             if let Ok((_, m)) = vehicle.recv() {
                 telemetry.update(&m);
             }
