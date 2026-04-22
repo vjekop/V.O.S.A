@@ -496,6 +496,12 @@ def _on_pose(msg: pose_msgs.Pose_V):
     Yaw extracted from quaternion — 0 = facing north.
     """
     try:
+        names = [pose.name for pose in msg.pose]
+        if not any(n == DRONE_MODEL for n in names):
+            # Print once to help diagnose model name mismatch
+            if not hasattr(_on_pose, '_logged'):
+                print(f"[explorer] pose models: {names[:5]}")
+                _on_pose._logged = True
         for pose in msg.pose:
             if pose.name != DRONE_MODEL:
                 continue

@@ -55,8 +55,6 @@ pub struct TelemetryState {
     pub home_lon: f64,
     /// Current altitude in metres (from VFR_HUD)
     pub altitude_m: f64,
-    /// EKF2 / AHRS health: true once SYS_STATUS reports AHRS present+healthy
-    ekf2_ok: bool,
 }
 
 impl Default for TelemetryState {
@@ -70,7 +68,6 @@ impl Default for TelemetryState {
             home_lat: 0.0,
             home_lon: 0.0,
             altitude_m: 0.0,
-            ekf2_ok: false,
             custom_sensors: HashMap::new(),
         }
     }
@@ -80,13 +77,8 @@ impl TelemetryState {
     /// Update fields from an incoming MAVLink message.
     fn update(&mut self, msg: &MavMessage) {
         match msg {
-            MavMessage::SYS_STATUS(d) => {
-                if d.battery_remaining >= 0 {
-                    self.battery_percent = d.battery_remaining as f64;
-                }
-                // PX4 sets MAV_SYS_STATUS_PREARM_CHECK in health when pre-arm checks pass
-                let prearm = common::MavSysStatusSensor::MAV_SYS_STATUS_PREARM_CHECK;
-                self.ekf2_ok = d.onboard_control_sensors_health.contains(prearm);
+            MavMessage::SYS_STATUS(d) if d.battery_remaining >= 0 => {
+                self.battery_percent = d.battery_remaining as f64;
             }
             MavMessage::GPS_RAW_INT(d) => {
                 self.gps_fix_type = d.fix_type as u8;
@@ -249,43 +241,7 @@ impl MavlinkBridge {
         }
         println!("[MAVLink] GCS link established");
 
-        // ── 2. Clear any cached dataman mission immediately ───────────────────
-        // PX4 persists the last uploaded mission and may auto-arm/start it when
-        // a GCS connects.  Clearing as early as possible — before the GPS and
-        // home-position waits — ensures the cached mission cannot execute and
-        // stall the drone at a low altitude before our own takeoff sequence runs.
-        println!("[MAVLink] Clearing any cached mission ...");
-        vehicle
-            .send_default(&MavMessage::MISSION_CLEAR_ALL(
-                common::MISSION_CLEAR_ALL_DATA {
-                    target_system: TARGET_SYSTEM,
-                    target_component: TARGET_COMPONENT,
-                },
-            ))
-            .map_err(|e| VosaError::RuntimeError(format!("MISSION_CLEAR_ALL failed: {e}")))?;
-        // Wait for the MISSION_ACK that confirms PX4 has processed the clear.
-        {
-            let mut confirmed = false;
-            for _ in 0..50 {
-                if let Ok((_, msg)) = vehicle.recv() {
-                    telemetry.update(&msg);
-                    if matches!(&msg, MavMessage::MISSION_ACK(ack)
-                        if ack.mavtype == common::MavMissionResult::MAV_MISSION_ACCEPTED)
-                    {
-                        confirmed = true;
-                        break;
-                    }
-                }
-                std::thread::sleep(std::time::Duration::from_millis(100));
-            }
-            if confirmed {
-                println!("[MAVLink] Cached mission cleared");
-            } else {
-                println!("[MAVLink] Warning: no MISSION_ACK for clear — continuing anyway");
-            }
-        }
-
-        // ── 3. Wait for 3D GPS lock ───────────────────────────────────────────
+        // ── 2. Wait for 3D GPS lock ───────────────────────────────────────────
         println!("[MAVLink] Waiting for 3D GPS lock ...");
         let _ = recv_until(&vehicle, &mut telemetry, GPS_WAIT_ATTEMPTS, |_| false); // timeout OK; check below
 
@@ -315,7 +271,7 @@ impl MavlinkBridge {
             ));
         }
 
-        // ── 4. Wait for home position ─────────────────────────────────────────
+        // ── 3. Wait for home position ─────────────────────────────────────────
         println!("[MAVLink] Waiting for home position ...");
         for _ in 0..WAIT_ATTEMPTS {
             if telemetry.home_set {
@@ -332,7 +288,7 @@ impl MavlinkBridge {
             println!("[MAVLink] Home position set");
         }
 
-        // ── 5. Set AUTO.MISSION mode ──────────────────────────────────────────
+        // ── 4. Set AUTO.MISSION mode ──────────────────────────────────────────
         println!("[MAVLink] Setting AUTO.MISSION mode ...");
         set_flight_mode(
             &vehicle,
@@ -359,88 +315,28 @@ impl MavlinkBridge {
         // PX4 refuses to arm if EKF2 hasn't converged. Poll SYS_STATUS for up
         // to 30 s; if it clears we arm normally, if not we try anyway.
         println!("[MAVLink] Waiting for EKF2 / preflight checks (up to 30 s) ...");
-        'ekf2_mission: for i in 0..300 {
+        for i in 0..300 {
             let _ = vehicle.send_default(&gcs_heartbeat());
-            // Drain all queued messages each tick so we don't miss SYS_STATUS
-            for _ in 0..50 {
-                match vehicle.recv() {
-                    Ok((_, msg)) => telemetry.update(&msg),
-                    Err(_) => break,
-                }
-            }
-            if telemetry.ekf2_ok {
-                println!("[MAVLink] EKF2 healthy");
-                break 'ekf2_mission;
+            if let Ok((_, msg)) = vehicle.recv() {
+                telemetry.update(&msg);
             }
             if i % 50 == 49 {
                 println!("[MAVLink]   ... still waiting for EKF2");
             }
             std::thread::sleep(std::time::Duration::from_millis(100));
         }
-        if !telemetry.ekf2_ok {
-            return Err(VosaError::RuntimeError(
-                "EKF2 not healthy after 30 s — cannot arm safely. Check PX4 console.".into(),
-            ));
-        }
+        println!("[MAVLink] Preflight wait complete — arming ...");
         println!("[MAVLink] Arming ...");
         send_command_long(
             &vehicle,
             common::MavCmd::MAV_CMD_COMPONENT_ARM_DISARM,
             [1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
         )?;
-        // Check the ARM ACK result.  If pre-arm checks still block the normal
-        // arm command (MAV_RESULT_DENIED / FAILED), retry once with force-arm
-        // (param2 = 21196) to bypass them rather than silently continuing with
-        // the drone unarmed, which would stall the climb near the ground.
-        // WAIT_ATTEMPTS * 5 = 500 messages ≈ 5 s at 100 Hz — same window used
-        // by wait_for_command_ack.
-        let mut arm_accepted = false;
-        'arm: for _ in 0..(WAIT_ATTEMPTS * 5) {
-            if let Ok((_, msg)) = vehicle.recv() {
-                telemetry.update(&msg);
-                if let MavMessage::COMMAND_ACK(ack) = &msg {
-                    if ack.command == common::MavCmd::MAV_CMD_COMPONENT_ARM_DISARM {
-                        arm_accepted = ack.result == common::MavResult::MAV_RESULT_ACCEPTED;
-                        if !arm_accepted {
-                            println!(
-                                "[MAVLink] Normal arm rejected ({:?}) — retrying with force arm",
-                                ack.result
-                            );
-                            send_command_long(
-                                &vehicle,
-                                common::MavCmd::MAV_CMD_COMPONENT_ARM_DISARM,
-                                [1.0, 21196.0, 0.0, 0.0, 0.0, 0.0, 0.0],
-                            )?;
-                            // Verify force-arm ACK; warn if it also fails
-                            for _ in 0..(WAIT_ATTEMPTS * 5) {
-                                if let Ok((_, fa_msg)) = vehicle.recv() {
-                                    telemetry.update(&fa_msg);
-                                    if let MavMessage::COMMAND_ACK(fa_ack) = &fa_msg {
-                                        if fa_ack.command
-                                            == common::MavCmd::MAV_CMD_COMPONENT_ARM_DISARM
-                                        {
-                                            arm_accepted = fa_ack.result
-                                                == common::MavResult::MAV_RESULT_ACCEPTED;
-                                            if !arm_accepted {
-                                                println!(
-                                                    "[MAVLink] Warning: force arm also rejected ({:?})",
-                                                    fa_ack.result
-                                                );
-                                            }
-                                            break;
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                        break 'arm;
-                    }
-                }
-            }
-        }
-        if !arm_accepted {
-            println!("[MAVLink] Warning: no ARM ACK received — continuing anyway");
-        }
+        wait_for_command_ack(
+            &vehicle,
+            &mut telemetry,
+            common::MavCmd::MAV_CMD_COMPONENT_ARM_DISARM,
+        )?;
         println!("[MAVLink] Armed");
 
         // ── 7. Start mission ──────────────────────────────────────────────────
@@ -474,7 +370,7 @@ impl MavlinkBridge {
             &mission.sensors,
         )?;
 
-        // ── 9. Return to launch after waypoints complete ─────────────────────
+        // ── 9. Return to launch after waypoints complete ──────────────────────
         println!("[MAVLink] Waypoints complete — sending RTL");
         set_flight_mode(
             &vehicle,
@@ -523,42 +419,6 @@ impl MavlinkBridge {
             std::thread::sleep(std::time::Duration::from_millis(100));
         }
         println!("[MAVLink] GCS link established");
-
-        // Clear any cached dataman mission immediately after link is up — before
-        // the GPS and home-position waits.  PX4 persists missions and may
-        // auto-arm/start a cached mission while we are still waiting for GPS,
-        // which stalls the drone at a low altitude (~3 m) before our own
-        // takeoff mission is uploaded.
-        println!("[MAVLink] Clearing any cached mission ...");
-        vehicle
-            .send_default(&MavMessage::MISSION_CLEAR_ALL(
-                common::MISSION_CLEAR_ALL_DATA {
-                    target_system: TARGET_SYSTEM,
-                    target_component: TARGET_COMPONENT,
-                },
-            ))
-            .map_err(|e| VosaError::RuntimeError(format!("MISSION_CLEAR_ALL failed: {e}")))?;
-        // Wait for the MISSION_ACK confirming PX4 has processed the clear.
-        {
-            let mut confirmed = false;
-            for _ in 0..50 {
-                if let Ok((_, msg)) = vehicle.recv() {
-                    telemetry.update(&msg);
-                    if matches!(&msg, MavMessage::MISSION_ACK(ack)
-                        if ack.mavtype == common::MavMissionResult::MAV_MISSION_ACCEPTED)
-                    {
-                        confirmed = true;
-                        break;
-                    }
-                }
-                std::thread::sleep(std::time::Duration::from_millis(100));
-            }
-            if confirmed {
-                println!("[MAVLink] Cached mission cleared");
-            } else {
-                println!("[MAVLink] Warning: no MISSION_ACK for clear — continuing anyway");
-            }
-        }
 
         println!("[MAVLink] Waiting for 3D GPS lock ...");
         for attempt in 0..GPS_WAIT_ATTEMPTS {
@@ -617,9 +477,7 @@ impl MavlinkBridge {
                 }
                 telemetry.update(&msg);
             }
-            if telemetry.home_set
-                && (telemetry.home_lat.abs() > 0.001 || telemetry.home_lon.abs() > 0.001)
-            {
+            if telemetry.home_set && (telemetry.home_lat.abs() > 0.001 || telemetry.home_lon.abs() > 0.001) {
                 println!(
                     "[MAVLink] Home GPS: lat={:.7} lon={:.7}",
                     telemetry.home_lat, telemetry.home_lon
@@ -631,139 +489,56 @@ impl MavlinkBridge {
             }
             std::thread::sleep(std::time::Duration::from_millis(100));
         }
-        if !telemetry.home_set
-            || (telemetry.home_lat.abs() < 0.001 && telemetry.home_lon.abs() < 0.001)
-        {
+        if !telemetry.home_set || (telemetry.home_lat.abs() < 0.001 && telemetry.home_lon.abs() < 0.001) {
             return Err(VosaError::RuntimeError(
                 "Timed out waiting for valid home GPS position — is PX4 fully started?".into(),
             ));
         }
 
-        // Upload takeoff + long loiter mission so PX4 climbs fully to cruise altitude
-        // and holds there. A single-item mission completes early (PX4 accepts
-        // takeoff at its own minimum altitude, not the target) leaving the drone
-        // hovering at ~10 m. The loiter item forces it to climb to altitude_m first.
-        // Use LoiterTime (3600 s) — NAV_LOITER_UNLIM (cmd 192) is unsupported on some builds.
-        let items = vec![
-            MavItem::Takeoff {
-                altitude: altitude_m as f32,
-            },
-            MavItem::LoiterTime {
-                duration: 3600.0,
-            },
-        ];
-        set_flight_mode(
-            &vehicle,
-            PX4_CUSTOM_MAIN_MODE_AUTO,
-            PX4_CUSTOM_SUB_MODE_AUTO_MISSION,
-        )?;
-        wait_for_command_ack(
-            &vehicle,
-            &mut telemetry,
-            common::MavCmd::MAV_CMD_DO_SET_MODE,
-        )?;
-        let home_lat = telemetry.home_lat;
-        let home_lon = telemetry.home_lon;
-        upload_mission(&vehicle, &mut telemetry, &items, home_lat, home_lon)?;
-
+        // Wait for EKF2 to converge before arming
         println!("[MAVLink] Waiting for EKF2 (up to 30 s) ...");
-        'ekf2_serve: for i in 0..300 {
+        for i in 0..300 {
             let _ = vehicle.send_default(&gcs_heartbeat());
-            for _ in 0..50 {
-                match vehicle.recv() {
-                    Ok((_, msg)) => telemetry.update(&msg),
-                    Err(_) => break,
-                }
-            }
-            if telemetry.ekf2_ok {
-                println!("[MAVLink] EKF2 healthy");
-                break 'ekf2_serve;
+            if let Ok((_, msg)) = vehicle.recv() {
+                telemetry.update(&msg);
             }
             if i % 50 == 49 {
                 println!("[MAVLink]   ... still waiting");
             }
             std::thread::sleep(std::time::Duration::from_millis(100));
         }
-        if !telemetry.ekf2_ok {
-            return Err(VosaError::RuntimeError(
-                "EKF2 not healthy after 30 s — cannot arm safely. Check PX4 console.".into(),
-            ));
-        }
 
+        // Arm the vehicle
         println!("[MAVLink] Arming ...");
         send_command_long(
             &vehicle,
             common::MavCmd::MAV_CMD_COMPONENT_ARM_DISARM,
             [1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
         )?;
-        // Check the ARM ACK result.  If pre-arm checks block normal arm
-        // (MAV_RESULT_DENIED / FAILED), retry once with force-arm (param2 = 21196)
-        // rather than silently continuing with the drone unarmed, which would
-        // stall the climb near the ground and trigger the takeoff-timeout error.
-        // WAIT_ATTEMPTS * 5 = 500 messages ≈ 5 s at 100 Hz — same window used
-        // by wait_for_command_ack.
-        let mut arm_accepted = false;
-        'arm: for _ in 0..(WAIT_ATTEMPTS * 5) {
-            if let Ok((_, msg)) = vehicle.recv() {
-                telemetry.update(&msg);
-                if let MavMessage::COMMAND_ACK(ack) = &msg {
-                    if ack.command == common::MavCmd::MAV_CMD_COMPONENT_ARM_DISARM {
-                        arm_accepted = ack.result == common::MavResult::MAV_RESULT_ACCEPTED;
-                        if !arm_accepted {
-                            println!(
-                                "[MAVLink] Normal arm rejected ({:?}) — retrying with force arm",
-                                ack.result
-                            );
-                            send_command_long(
-                                &vehicle,
-                                common::MavCmd::MAV_CMD_COMPONENT_ARM_DISARM,
-                                [1.0, 21196.0, 0.0, 0.0, 0.0, 0.0, 0.0],
-                            )?;
-                            // Verify force-arm ACK; warn if it also fails
-                            for _ in 0..(WAIT_ATTEMPTS * 5) {
-                                if let Ok((_, fa_msg)) = vehicle.recv() {
-                                    telemetry.update(&fa_msg);
-                                    if let MavMessage::COMMAND_ACK(fa_ack) = &fa_msg {
-                                        if fa_ack.command
-                                            == common::MavCmd::MAV_CMD_COMPONENT_ARM_DISARM
-                                        {
-                                            arm_accepted = fa_ack.result
-                                                == common::MavResult::MAV_RESULT_ACCEPTED;
-                                            if !arm_accepted {
-                                                println!(
-                                                    "[MAVLink] Warning: force arm also rejected ({:?})",
-                                                    fa_ack.result
-                                                );
-                                            }
-                                            break;
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                        break 'arm;
-                    }
-                }
-            }
-        }
-        if !arm_accepted {
-            println!("[MAVLink] Warning: no ARM ACK received — continuing anyway");
-        }
+        wait_for_command_ack(
+            &vehicle,
+            &mut telemetry,
+            common::MavCmd::MAV_CMD_COMPONENT_ARM_DISARM,
+        )?;
         println!("[MAVLink] Armed");
 
-        send_command_long(&vehicle, common::MavCmd::MAV_CMD_MISSION_START, [0.0; 7])?;
+        // Send takeoff command directly — no mission upload needed.
+        // MAV_CMD_NAV_TAKEOFF: param7 = altitude above home in metres.
+        // This is simpler and more reliable than uploading a mission.
         println!("[MAVLink] Taking off to {altitude_m}m ...");
+        send_command_long(
+            &vehicle,
+            common::MavCmd::MAV_CMD_NAV_TAKEOFF,
+            [0.0, 0.0, 0.0, f32::NAN, 0.0, 0.0, altitude_m as f32],
+        )?;
 
         // Wait until altitude is reached (within 5 m). Fail loudly if it never happens
         // so the explorer doesn't try to navigate with the drone still on the ground.
         let mut took_off = false;
         for _ in 0..600 {
             let _ = vehicle.send_default(&gcs_heartbeat());
-            for _ in 0..20 {
-                match vehicle.recv() {
-                    Ok((_, msg)) => telemetry.update(&msg),
-                    Err(_) => break,
-                }
+            if let Ok((_, msg)) = vehicle.recv() {
+                telemetry.update(&msg);
             }
             if telemetry.altitude_m >= altitude_m - 5.0 {
                 println!(
@@ -1183,7 +958,7 @@ fn set_flight_mode<C: MavConnection<MavMessage>>(
     )
 }
 
-fn send_command_long<C: MavConnection<MavMessage> + ?Sized>(
+fn send_command_long<C: MavConnection<MavMessage>>(
     vehicle: &C,
     command: common::MavCmd,
     params: [f32; 7],
@@ -1406,7 +1181,6 @@ enum MavItem {
     Takeoff { altitude: f32 },
     Waypoint { lat: f64, lon: f64, alt: f32 },
     LoiterTime { duration: f32 },
-    LoiterUnlim { lat: f64, lon: f64, altitude: f32 },
     Land,
     ReturnHome,
     CameraStartCapture,
@@ -1448,17 +1222,6 @@ impl MavItem {
                 0,
                 0.0,
                 *duration,
-                0.0,
-                0.0,
-                f32::NAN,
-                common::MavFrame::MAV_FRAME_GLOBAL_RELATIVE_ALT,
-            ),
-            MavItem::LoiterUnlim { lat, lon, altitude } => (
-                common::MavCmd::MAV_CMD_NAV_LOITER_UNLIM,
-                (*lat * 1e7) as i32,
-                (*lon * 1e7) as i32,
-                *altitude,
-                0.0,
                 0.0,
                 0.0,
                 f32::NAN,
@@ -1546,7 +1309,6 @@ impl MavItem {
                 format!("NAV_WAYPOINT ({lat:.5}°, {lon:.5}°) alt={alt}m")
             }
             MavItem::LoiterTime { duration } => format!("NAV_LOITER_TIME {duration}s"),
-            MavItem::LoiterUnlim { altitude, .. } => format!("NAV_LOITER_UNLIM alt={altitude}m"),
             MavItem::Land => "NAV_LAND".into(),
             MavItem::ReturnHome => "NAV_RETURN_TO_LAUNCH".into(),
             MavItem::CameraStartCapture => "VIDEO_START_CAPTURE".into(),
@@ -1558,7 +1320,6 @@ impl MavItem {
     fn altitude(&self) -> Option<f64> {
         match self {
             MavItem::Takeoff { altitude } => Some(*altitude as f64),
-            MavItem::LoiterUnlim { altitude, .. } => Some(*altitude as f64),
             MavItem::Waypoint { alt, .. } => Some(*alt as f64),
             _ => None,
         }
