@@ -1094,6 +1094,10 @@ fn wait_for_command_ack<C: MavConnection<MavMessage>>(
 }
 
 /// Upload the full mission using the MAVLink mission protocol.
+///
+/// Sends heartbeats throughout to prevent PX4 from declaring GCS lost
+/// (which would abort the upload), and retries MISSION_COUNT if PX4 doesn't
+/// respond within 2 s — SITL occasionally drops the first packet.
 fn upload_mission<C: MavConnection<MavMessage>>(
     vehicle: &C,
     telemetry: &mut TelemetryState,
@@ -1101,24 +1105,49 @@ fn upload_mission<C: MavConnection<MavMessage>>(
     home_lat: f64,
     home_lon: f64,
 ) -> Result<(), VosaError> {
-    vehicle
-        .send_default(&MavMessage::MISSION_COUNT(common::MISSION_COUNT_DATA {
-            count: items.len() as u16,
-            target_system: TARGET_SYSTEM,
-            target_component: TARGET_COMPONENT,
-        }))
-        .map_err(|e| VosaError::RuntimeError(format!("MISSION_COUNT send failed: {e}")))?;
+    let send_count = || -> Result<(), VosaError> {
+        vehicle
+            .send_default(&MavMessage::MISSION_COUNT(common::MISSION_COUNT_DATA {
+                count: items.len() as u16,
+                target_system: TARGET_SYSTEM,
+                target_component: TARGET_COMPONENT,
+            }))
+            .map_err(|e| VosaError::RuntimeError(format!("MISSION_COUNT send failed: {e}")))
+            .map(|_| ())
+    };
+
+    send_count()?;
 
     let mut acked = false;
-    let mut attempts = items.len() * WAIT_ATTEMPTS + 50;
+    let mut last_heartbeat = std::time::Instant::now();
+    let mut last_count_sent = std::time::Instant::now();
+    let mut attempts = items.len() * WAIT_ATTEMPTS + 200;
 
     while !acked && attempts > 0 {
         attempts -= 1;
+
+        // Keep GCS link alive — PX4 declares link lost after ~3 s without heartbeat
+        if last_heartbeat.elapsed() >= std::time::Duration::from_secs(1) {
+            let _ = vehicle.send_default(&gcs_heartbeat());
+            last_heartbeat = std::time::Instant::now();
+        }
+
+        // Retry MISSION_COUNT if PX4 hasn't requested item 0 after 2 s
+        if last_count_sent.elapsed() >= std::time::Duration::from_secs(2) {
+            println!(
+                "[MAVLink] Retrying MISSION_COUNT ({} items) ...",
+                items.len()
+            );
+            send_count()?;
+            last_count_sent = std::time::Instant::now();
+        }
+
         match vehicle.recv() {
             Ok((_, msg)) => {
                 telemetry.update(&msg);
                 match msg {
                     MavMessage::MISSION_REQUEST_INT(req) => {
+                        last_count_sent = std::time::Instant::now(); // reset retry timer
                         let seq = req.seq as usize;
                         if seq >= items.len() {
                             return Err(VosaError::RuntimeError(format!(
