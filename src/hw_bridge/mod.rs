@@ -639,18 +639,17 @@ impl MavlinkBridge {
             ));
         }
 
-        // Upload takeoff + loiter mission so PX4 climbs fully to cruise altitude
+        // Upload takeoff + long loiter mission so PX4 climbs fully to cruise altitude
         // and holds there. A single-item mission completes early (PX4 accepts
         // takeoff at its own minimum altitude, not the target) leaving the drone
         // hovering at ~10 m. The loiter item forces it to climb to altitude_m first.
+        // Use LoiterTime (3600 s) — NAV_LOITER_UNLIM (cmd 192) is unsupported on some builds.
         let items = vec![
             MavItem::Takeoff {
                 altitude: altitude_m as f32,
             },
-            MavItem::LoiterUnlim {
-                lat: telemetry.home_lat,
-                lon: telemetry.home_lon,
-                altitude: altitude_m as f32,
+            MavItem::LoiterTime {
+                duration: 3600.0,
             },
         ];
         set_flight_mode(
