@@ -133,7 +133,7 @@ LIDAR_MAX_RANGE = 28.0    # slightly under sensor max to ignore edge noise
 # ══════════════════════════════════════════════════════════════════════════════
 
 WAYPOINT_STEP = 3.0   # metres between waypoints sent to PX4
-ARRIVAL_TOL   = 2.5   # metres — waypoint considered reached within this distance
+ARRIVAL_TOL   = 4.0   # metres — waypoint considered reached within this distance
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -613,6 +613,8 @@ def main():
 
         if pose_age > 5.0:
             print("[explorer] WARNING: no pose — is Gazebo running?")
+        else:
+            print(f"[explorer] pose N={north:+.1f} E={east:+.1f} age={pose_age:.1f}s")
         if depth_age > 5.0:
             print("[explorer] WARNING: depth camera silent")
         if lidar_age > 5.0:
